@@ -1,0 +1,11 @@
+groq
+sentence-transformers
+numpy
+requests
+python-dotenv
+ultralytics
+pytesseract
+opencv-python
+pyzbar
+SpeechRecognition
+pyttsx3
