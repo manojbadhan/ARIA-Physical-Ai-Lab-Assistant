@@ -62,7 +62,7 @@ if __name__ == "__main__":
     llm = LabAssistantLLM()
 
     response = llm.generate_response(
-        user_message="What is artificial intelligence?",
+        user_message="what is a 3d printer?",
         system_prompt=SYSTEM_PROMPT
     )
 

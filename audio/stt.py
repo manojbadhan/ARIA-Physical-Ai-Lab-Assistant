@@ -21,6 +21,8 @@ class SpeechToText:
                     file=audio_file,
                     model=self.model,
                     response_format="text",
+                    language="en",
+                    temperature=0
                 )
             text = response.strip() if isinstance(response, str) else response.text.strip()
             return text if text else None
