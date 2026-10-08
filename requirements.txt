@@ -9,3 +9,4 @@ opencv-python
 pyzbar
 SpeechRecognition
 pyttsx3
+sounddevice
