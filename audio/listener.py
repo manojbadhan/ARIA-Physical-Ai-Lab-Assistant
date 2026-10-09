@@ -12,7 +12,7 @@ try:
 except ImportError:
     webrtcvad = None
  
-RATE = 16000
+RATE = 48000
 BLOCK = RATE * 30 // 1000       # 30 ms audio blocks (a size WebRTC VAD accepts)
 MIC_THRESHOLD = None            # None = auto-calibrate; or set a number (see the level bar)
 VAD_AGGRESSIVENESS = 3          # 0-3; 3 is the strictest about calling something speech
