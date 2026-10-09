@@ -31,4 +31,3 @@ def draw_frame(frame, s):
                   (0, 255, 0) if level > threshold else (160, 160, 160), -1)
     cv2.line(view, (115, h - 40), (115, h - 10), (0, 0, 255), 2)
     return view
- 
