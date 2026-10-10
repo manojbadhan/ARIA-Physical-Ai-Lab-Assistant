@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ARIA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/logo/favicon.svg">
+<link rel="stylesheet" href="css/style.css"></head>
+<body data-mode="home">
+<aside id="side">
+<div class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M3 21 12 3l9 18"/><path d="M7.5 14h9" stroke="var(--acc)"/><rect x="10.6" y="12.6" width="2.8" height="2.8" fill="var(--acc)" stroke="none"/></svg>ARIA</div>
+<div class="m sess up" id="sess"></div>
+<button class="new m up" id="new"><span>New session</span><span>+</span></button>
+<h3>This session</h3><ul class="ql" id="ql"></ul>
+<h3>Knowledge base</h3><ul class="docs" id="docs"></ul>
+<div class="foot"><div class="m up">Memory</div><div class="mem" id="mem"></div><div class="m" id="memt"></div></div>
+</aside>
+<header id="top">
+<nav class="tabs m up"><button id="t-home" class="on">ARIA</button><button id="t-chat">Chat<span id="cn"></span></button></nav>
+<div class="sts m up">
+<div class="st on"><i></i><span>ARIA Core</span><b>Ready</b></div>
+<div class="st on"><i></i><span>Knowledge</span><b id="kc"></b></div>
+<div class="st" id="vs"><i></i><span>Voice</span><b id="vt"></b></div>
+</div></header>
+<main id="stage">
+<section id="home">
+<h1 class="mark">AR<b>I</b>A</h1>
+<div class="tag">Physical AI<br>Lab Assistant</div>
+<div class="ready m up">System ready · ask something about the lab</div>
+<ul class="start">
+<li><button data-q="How do I derive the transformation matrix?"><span class="c m up">Kinematics</span><span class="q">How do I derive the transformation matrix?</span></button></li>
+<li><button data-q="Explain loop closure in simple terms."><span class="c m up">SLAM</span><span class="q">Explain loop closure in simple terms.</span></button></li>
+<li><button data-q="How does object detection work?"><span class="c m up">Vision</span><span class="q">How does object detection work?</span></button></li>
+<li><button data-q="Show me the procedure for calibrating the robotic arm."><span class="c m up">Procedure</span><span class="q">Show me the procedure for calibrating the robotic arm.</span></button></li>
+</ul></section>
+<section id="chat"><div id="msgs"></div></section>
+</main>
+<footer id="dock">
+<label class="lab m up" for="q">Ask ARIA</label>
+<textarea id="q" rows="1" placeholder="Your question…"></textarea>
+<div class="btns m up"><button id="mic">Mic</button><button class="send" id="send">Send</button></div>
+<div class="hint m">Enter to send · Shift+Enter for a new line · Esc closes voice</div>
+</footer>
+<div id="vo">
+<div class="r m up"><span>ARIA / Voice</span><span id="vsub">Microphone open</span></div>
+<div id="vw">Listening</div>
+<div><canvas id="cv"></canvas><div class="vb"><div id="tr"></div><button class="stop m up" id="stop">Stop</button></div></div>
+</div>
+<script src="js/api.js"></script>
+<script src="js/script.js"></script>
+</body></html>
