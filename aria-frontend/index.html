@@ -21,6 +21,7 @@
 <div class="st on"><i></i><span>ARIA Core</span><b>Ready</b></div>
 <div class="st on"><i></i><span>Knowledge</span><b id="kc"></b></div>
 <div class="st" id="vs"><i></i><span>Voice</span><b id="vt"></b></div>
+<div class="st" id="cs"><i></i><span>Camera</span><b id="ct"></b></div>
 </div></header>
 <main id="stage">
 <section id="home">
@@ -38,13 +39,19 @@
 <footer id="dock">
 <label class="lab m up" for="q">Ask ARIA</label>
 <textarea id="q" rows="1" placeholder="Your question…"></textarea>
-<div class="btns m up"><button id="mic">Mic</button><button class="send" id="send">Send</button></div>
-<div class="hint m">Enter to send · Shift+Enter for a new line · Esc closes voice</div>
+<div class="btns m up"><button id="cam">Camera</button><button id="mic">Mic</button><button class="send" id="send">Send</button></div>
+<div class="hint m">Enter to send · Shift+Enter for a new line · Esc closes voice or camera</div>
 </footer>
 <div id="vo">
 <div class="r m up"><span>ARIA / Voice</span><span id="vsub">Microphone open</span></div>
 <div id="vw">Listening</div>
 <div><canvas id="cv"></canvas><div class="vb"><div id="tr"></div><button class="stop m up" id="stop">Stop</button></div></div>
+</div>
+<div id="co" role="dialog" aria-label="Camera">
+<div class="r m up"><span>ARIA / Camera</span><span id="csub">Starting camera</span></div>
+<div class="vw"><video id="cvid" autoplay playsinline muted></video><div class="cmsg" id="cmsg"></div></div>
+<div class="cb"><input id="cq" class="cq" type="text" placeholder="Ask about what you see (optional)" autocomplete="off">
+<div class="cbtn m up"><button id="cup">Upload</button><input id="cfile" type="file" accept="image/*"><button id="cflip">Flip</button><button id="cshot" class="shot">Capture</button><button id="cstop">Close</button></div></div>
 </div>
 <script src="js/api.js"></script>
 <script src="js/script.js"></script>

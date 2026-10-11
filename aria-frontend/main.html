@@ -121,6 +121,31 @@ body[data-mode=chat] #home{transform:translateX(-10%);opacity:0;pointer-events:n
 #tr{font-size:15px;color:#a9a69b;max-width:60ch}
 #vo .stop{border:1px solid #ebe8de;padding:11px 22px}
 #vo .stop:hover{background:#ebe8de;color:#14130f}
+/* camera */
+#co{position:fixed;inset:0;z-index:20;background:#14130f;color:#ebe8de;display:grid;grid-template-rows:auto 1fr auto;gap:16px;padding:20px 28px 24px;clip-path:circle(0% at 86% 94%);visibility:hidden;transition:clip-path .55s cubic-bezier(.6,0,.2,1),visibility 0s .55s}
+#co.open{clip-path:circle(150% at 86% 94%);visibility:visible;transition:clip-path .55s cubic-bezier(.6,0,.2,1),visibility 0s}
+#co .r{display:flex;justify-content:space-between}
+#co .vw{position:relative;min-height:0;display:flex;align-items:center;justify-content:center;background:#0b0b09;outline:1px solid #34322b}
+#cvid{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:block}
+#co .vw::before,#co .vw::after{content:"";position:absolute;width:26px;height:26px;border:2px solid #8a9bff;pointer-events:none}
+#co .vw::before{left:10px;top:10px;border-right:0;border-bottom:0}
+#co .vw::after{right:10px;bottom:10px;border-left:0;border-top:0}
+.cmsg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;color:#a9a69b;font-size:15px;line-height:1.5}
+.cmsg.on{display:flex}
+.cb{display:flex;gap:24px;align-items:end;justify-content:space-between}
+.cq{flex:1;max-width:60ch;border:0;border-bottom:1px solid #ebe8de;background:transparent;color:#ebe8de;font:500 18px var(--sans);padding:8px 0 10px;outline:0}
+.cq::placeholder{color:#6f6c63}
+.cq:focus{border-bottom:3px solid #8a9bff;padding-bottom:8px}
+.cbtn{display:flex;gap:8px}
+#cfile{display:none}
+.cbtn button{border:1px solid #ebe8de;padding:11px 20px;text-align:center}
+.cbtn button:hover{background:#ebe8de;color:#14130f}
+.cbtn .shot{background:#8a9bff;border-color:#8a9bff;color:#fff}
+.cbtn .shot:hover{background:#ebe8de;border-color:#ebe8de;color:#14130f}
+.cbtn button:disabled{opacity:.4;pointer-events:none}
+.u img{display:block;max-width:240px;width:100%;border-radius:8px;margin:0 0 8px}
+@media(max-width:900px){
+#co{padding:16px 16px 20px}.cb{flex-direction:column;align-items:stretch;gap:14px}.cq{max-width:none}.cbtn button{flex:1}}
 @media(max-width:900px){
 #top{padding:14px 18px}.st:not(:first-child){display:none}
 #stage{bottom:176px}
@@ -143,6 +168,7 @@ body[data-mode=chat] #home{transform:translateX(-10%);opacity:0;pointer-events:n
 <div class="st on"><i></i><span>ARIA Core</span><b>Ready</b></div>
 <div class="st on"><i></i><span>Knowledge</span><b id="kc"></b></div>
 <div class="st" id="vs"><i></i><span>Voice</span><b id="vt"></b></div>
+<div class="st" id="cs"><i></i><span>Camera</span><b id="ct"></b></div>
 </div></header>
 <main id="stage">
 <section id="home">
@@ -160,13 +186,19 @@ body[data-mode=chat] #home{transform:translateX(-10%);opacity:0;pointer-events:n
 <footer id="dock">
 <label class="lab m up" for="q">Ask ARIA</label>
 <textarea id="q" rows="1" placeholder="Your question…"></textarea>
-<div class="btns m up"><button id="mic">Mic</button><button class="send" id="send">Send</button></div>
-<div class="hint m">Enter to send · Shift+Enter for a new line · Esc closes voice</div>
+<div class="btns m up"><button id="cam">Camera</button><button id="mic">Mic</button><button class="send" id="send">Send</button></div>
+<div class="hint m">Enter to send · Shift+Enter for a new line · Esc closes voice or camera</div>
 </footer>
 <div id="vo">
 <div class="r m up"><span>ARIA / Voice</span><span id="vsub">Microphone open</span></div>
 <div id="vw">Listening</div>
 <div><canvas id="cv"></canvas><div class="vb"><div id="tr"></div><button class="stop m up" id="stop">Stop</button></div></div>
+</div>
+<div id="co" role="dialog" aria-label="Camera">
+<div class="r m up"><span>ARIA / Camera</span><span id="csub">Starting camera</span></div>
+<div class="vw"><video id="cvid" autoplay playsinline muted></video><div class="cmsg" id="cmsg"></div></div>
+<div class="cb"><input id="cq" class="cq" type="text" placeholder="Ask about what you see (optional)" autocomplete="off">
+<div class="cbtn m up"><button id="cup">Upload</button><input id="cfile" type="file" accept="image/*"><button id="cflip">Flip</button><button id="cshot" class="shot">Capture</button><button id="cstop">Close</button></div></div>
 </div>
 <script>
 /* ARIA integration seam. Load this file BEFORE script.js.
@@ -181,6 +213,10 @@ const DEMO=[
 {k:/object|detect|vision/i,t:["Object detection finds what is in an image and where. A network proposes boxes, scores each class, and non-maximum suppression removes overlaps."],s:[[4,"Ch. 7 · Detection Pipelines",.9,"Single-stage detectors predict boxes and class scores in one pass; thresholds on confidence and IoU prune the output."],[5,"Camera Module · Notes",.62,"Frame rate and exposure set limits on how fast an object can move before detection degrades."]]},
 {k:/calibrat|arm|procedure/i,t:["Calibrate the arm from its home pose, then verify each joint against the reference mark before running any program."],s:[[1,"§4.1 · Arm Calibration",.95,"Power the controller, drive each joint to its limit switch, zero the encoders, then confirm the pose against the reference mark."],[3,"Driver Setup",.57,"Confirm the controller node is publishing joint states before starting calibration."]]}];
 async function ask(q){await new Promise(r=>setTimeout(r,1100));const d=DEMO.find(x=>x.k.test(q));return d?{t:d.t,f:d.f,s:d.s}:null}
+/* Camera seam. img is a JPEG data URL (data:image/jpeg;base64,...) of one captured frame, q is the optional question (may be "").
+   Replace the body with the real vision call (yolo11s.pt in vision/). Return the same shape as ask(). Demo only: it detects nothing. */
+async function askImage(img,q){await new Promise(r=>setTimeout(r,900));
+return{t:["Camera frame received"+(q?' with the question "'+q+'"':"")+". The vision backend is not connected yet, so nothing was detected in this frame.","Wire askImage() in js/api.js to the vision module to get real object detection."],s:[]}}
 const $=s=>document.querySelector(s),pad=n=>String(n).padStart(2,"0");
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition,TTS=window.speechSynthesis;
@@ -203,10 +239,10 @@ function render(){
    const r=t.r;
    if(!r)a='<p>No passage in the lab knowledge base answers this closely enough. Name the topic or document and try again.</p><div class="nf m up">Nothing found in lab knowledge</div>';
    else a=r.t.map(p=>"<p>"+esc(p)+"</p>").join("")+(r.f?'<div class="fx">'+esc(r.f)+"</div>":"")+
-    '<details open class="trail"><summary class="m up">Found in lab knowledge · '+pad(r.s.length)+' sources</summary><div class="grid">'+
-    r.s.map((s,j)=>'<button class="src"><span class="m"><span class="n">'+pad(j+1)+'</span> <span class="d">D-'+pad(s[0]+1)+'</span></span><span class="ti">'+esc(DOCS[s[0]])+'</span><span class="sec m">'+esc(s[1])+'</span><span class="rel m"><span class="trk"><i style="width:'+Math.round(s[2]*100)+'%"></i></span>relevance '+s[2].toFixed(2)+'</span><span class="ps">'+esc(s[3])+"</span></button>").join("")+"</div></details>";
+    (r.s&&r.s.length?'<details open class="trail"><summary class="m up">Found in lab knowledge · '+pad(r.s.length)+' sources</summary><div class="grid">'+
+    r.s.map((s,j)=>'<button class="src"><span class="m"><span class="n">'+pad(j+1)+'</span> <span class="d">D-'+pad(s[0]+1)+'</span></span><span class="ti">'+esc(DOCS[s[0]])+'</span><span class="sec m">'+esc(s[1])+'</span><span class="rel m"><span class="trk"><i style="width:'+Math.round(s[2]*100)+'%"></i></span>relevance '+s[2].toFixed(2)+'</span><span class="ps">'+esc(s[3])+"</span></button>").join("")+"</div></details>":"");
   }
-  return '<div class="turn" id="turn-'+i+'"><div class="u">'+esc(t.q)+'</div><div class="a"><div class="h m up">ARIA · '+t.time+"</div>"+a+"</div></div>";
+  return '<div class="turn" id="turn-'+i+'"><div class="u">'+(t.img?'<img src="'+t.img+'" alt="Captured camera frame">':"")+esc(t.q)+'</div><div class="a"><div class="h m up">ARIA · '+t.time+"</div>"+a+"</div></div>";
  }).join("");
  const n=turns.length;
  $("#cn").textContent=n?" "+n:"";
@@ -220,13 +256,13 @@ function render(){
 $("#msgs").addEventListener("click",e=>{const b=e.target.closest(".src");if(b)b.classList.toggle("open")});
 $("#ql").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;mode("chat");const el=$("#turn-"+b.dataset.i);if(el)el.scrollIntoView({block:"start"})});
 
-async function send(text){
+async function send(text,img,asked){
  text=(text||"").trim();if(!text||busy)return null;
  busy=true;mode("chat");
- const d=new Date(),t={q:text,time:pad(d.getHours())+":"+pad(d.getMinutes()),pending:true};
+ const d=new Date(),t={q:text,img:img||null,time:pad(d.getHours())+":"+pad(d.getMinutes()),pending:true};
  turns.push(t);if(turns.length>8)turns=turns.slice(-8);
  render();$("#chat").scrollTop=1e6;
- try{t.r=await ask(text)}catch(e){t.r=null}
+ try{t.r=img?await askImage(img,asked||""):await ask(text)}catch(e){t.r=null}
  t.pending=false;busy=false;render();$("#chat").scrollTop=1e6;
  return t.r;
 }
@@ -278,7 +314,49 @@ function openV(){
 }
 $("#mic").onclick=()=>{if(voiceOK)openV()};
 $("#stop").onclick=closeV;
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&open)closeV()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(open)closeV();if(camOpen)closeC()}});
+/* camera: live preview, capture one frame, send it with an optional question */
+const co=$("#co"),cvid=$("#cvid"),cmsg=$("#cmsg");
+const camOK=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+$("#ct").textContent=camOK?"Ready":"Not in this browser";if(camOK)$("#cs").classList.add("on");
+let stream=null,facing="environment",camOpen=false,camRun=0;
+function camMsg(t){cmsg.textContent=t||"";cmsg.classList.toggle("on",!!t)}
+function stopStream(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}cvid.srcObject=null}
+async function startStream(){
+ const my=++camRun;stopStream();$("#cshot").disabled=true;$("#csub").textContent="Starting camera";camMsg("");
+ if(!camOK){$("#csub").textContent="No camera";camMsg("This page cannot use the camera. Open it from http://localhost or an https address, and use a browser that supports it.");return}
+ try{
+  const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720}},audio:false});
+  if(my!==camRun||!camOpen){s.getTracks().forEach(t=>t.stop());return}
+  stream=s;cvid.srcObject=s;await cvid.play().catch(()=>{});
+  $("#csub").textContent="Live";$("#cshot").disabled=false;
+ }catch(e){
+  if(my!==camRun)return;
+  $("#csub").textContent="No camera";
+  camMsg(e&&e.name==="NotAllowedError"?"Camera access was blocked. Allow the camera for this page in the address bar and press Flip, or use Upload to send a photo instead.":e&&e.name==="NotFoundError"?"No camera was found on this device.":"The camera could not be started. Close other apps that use it and press Flip to try again.");
+ }
+}
+function closeC(){camOpen=false;camRun++;co.classList.remove("open");stopStream()}
+function openC(){camOpen=true;co.classList.add("open");$("#cq").value="";startStream()}
+function capture(){
+ if(!stream||!cvid.videoWidth)return;
+ if(busy){$("#csub").textContent="Wait for the current answer";return}
+ const w=cvid.videoWidth,h=cvid.videoHeight,k=Math.min(1,1024/Math.max(w,h)),c=document.createElement("canvas");
+ c.width=Math.round(w*k);c.height=Math.round(h*k);c.getContext("2d").drawImage(cvid,0,0,c.width,c.height);
+ const img=c.toDataURL("image/jpeg",.85),asked=$("#cq").value.trim();
+ closeC();send(asked||"What is in this frame?",img,asked);
+}
+function fileToFrame(f){return new Promise((ok,no)=>{const u=URL.createObjectURL(f),im=new Image();
+ im.onload=()=>{const k=Math.min(1,1024/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement("canvas");c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);ok(c.toDataURL("image/jpeg",.85))};
+ im.onerror=()=>{URL.revokeObjectURL(u);no()};im.src=u})}
+$("#cup").onclick=()=>$("#cfile").click();
+$("#cfile").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;
+ if(busy){$("#csub").textContent="Wait for the current answer";return}
+ try{const img=await fileToFrame(f),asked=$("#cq").value.trim();closeC();send(asked||"What is in this photo?",img,asked)}
+ catch(err){$("#csub").textContent="That file is not an image"}};
+$("#cam").onclick=openC;$("#cstop").onclick=closeC;$("#cshot").onclick=capture;
+$("#cflip").onclick=()=>{facing=facing==="environment"?"user":"environment";startStream()};
+$("#cq").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();capture()}});
 sessionId();render();
 </script>
 </body></html>

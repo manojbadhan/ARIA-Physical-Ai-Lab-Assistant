@@ -20,10 +20,10 @@ function render(){
    const r=t.r;
    if(!r)a='<p>No passage in the lab knowledge base answers this closely enough. Name the topic or document and try again.</p><div class="nf m up">Nothing found in lab knowledge</div>';
    else a=r.t.map(p=>"<p>"+esc(p)+"</p>").join("")+(r.f?'<div class="fx">'+esc(r.f)+"</div>":"")+
-    '<details open class="trail"><summary class="m up">Found in lab knowledge · '+pad(r.s.length)+' sources</summary><div class="grid">'+
-    r.s.map((s,j)=>'<button class="src"><span class="m"><span class="n">'+pad(j+1)+'</span> <span class="d">D-'+pad(s[0]+1)+'</span></span><span class="ti">'+esc(DOCS[s[0]])+'</span><span class="sec m">'+esc(s[1])+'</span><span class="rel m"><span class="trk"><i style="width:'+Math.round(s[2]*100)+'%"></i></span>relevance '+s[2].toFixed(2)+'</span><span class="ps">'+esc(s[3])+"</span></button>").join("")+"</div></details>";
+    (r.s&&r.s.length?'<details open class="trail"><summary class="m up">Found in lab knowledge · '+pad(r.s.length)+' sources</summary><div class="grid">'+
+    r.s.map((s,j)=>'<button class="src"><span class="m"><span class="n">'+pad(j+1)+'</span> <span class="d">D-'+pad(s[0]+1)+'</span></span><span class="ti">'+esc(DOCS[s[0]])+'</span><span class="sec m">'+esc(s[1])+'</span><span class="rel m"><span class="trk"><i style="width:'+Math.round(s[2]*100)+'%"></i></span>relevance '+s[2].toFixed(2)+'</span><span class="ps">'+esc(s[3])+"</span></button>").join("")+"</div></details>":"");
   }
-  return '<div class="turn" id="turn-'+i+'"><div class="u">'+esc(t.q)+'</div><div class="a"><div class="h m up">ARIA · '+t.time+"</div>"+a+"</div></div>";
+  return '<div class="turn" id="turn-'+i+'"><div class="u">'+(t.img?'<img src="'+t.img+'" alt="Captured camera frame">':"")+esc(t.q)+'</div><div class="a"><div class="h m up">ARIA · '+t.time+"</div>"+a+"</div></div>";
  }).join("");
  const n=turns.length;
  $("#cn").textContent=n?" "+n:"";
@@ -37,13 +37,13 @@ function render(){
 $("#msgs").addEventListener("click",e=>{const b=e.target.closest(".src");if(b)b.classList.toggle("open")});
 $("#ql").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;mode("chat");const el=$("#turn-"+b.dataset.i);if(el)el.scrollIntoView({block:"start"})});
 
-async function send(text){
+async function send(text,img,asked){
  text=(text||"").trim();if(!text||busy)return null;
  busy=true;mode("chat");
- const d=new Date(),t={q:text,time:pad(d.getHours())+":"+pad(d.getMinutes()),pending:true};
+ const d=new Date(),t={q:text,img:img||null,time:pad(d.getHours())+":"+pad(d.getMinutes()),pending:true};
  turns.push(t);if(turns.length>8)turns=turns.slice(-8);
  render();$("#chat").scrollTop=1e6;
- try{t.r=await ask(text)}catch(e){t.r=null}
+ try{t.r=img?await askImage(img,asked||""):await ask(text)}catch(e){t.r=null}
  t.pending=false;busy=false;render();$("#chat").scrollTop=1e6;
  return t.r;
 }
@@ -95,5 +95,47 @@ function openV(){
 }
 $("#mic").onclick=()=>{if(voiceOK)openV()};
 $("#stop").onclick=closeV;
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&open)closeV()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(open)closeV();if(camOpen)closeC()}});
+/* camera: live preview, capture one frame, send it with an optional question */
+const co=$("#co"),cvid=$("#cvid"),cmsg=$("#cmsg");
+const camOK=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+$("#ct").textContent=camOK?"Ready":"Not in this browser";if(camOK)$("#cs").classList.add("on");
+let stream=null,facing="environment",camOpen=false,camRun=0;
+function camMsg(t){cmsg.textContent=t||"";cmsg.classList.toggle("on",!!t)}
+function stopStream(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}cvid.srcObject=null}
+async function startStream(){
+ const my=++camRun;stopStream();$("#cshot").disabled=true;$("#csub").textContent="Starting camera";camMsg("");
+ if(!camOK){$("#csub").textContent="No camera";camMsg("This page cannot use the camera. Open it from http://localhost or an https address, and use a browser that supports it.");return}
+ try{
+  const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720}},audio:false});
+  if(my!==camRun||!camOpen){s.getTracks().forEach(t=>t.stop());return}
+  stream=s;cvid.srcObject=s;await cvid.play().catch(()=>{});
+  $("#csub").textContent="Live";$("#cshot").disabled=false;
+ }catch(e){
+  if(my!==camRun)return;
+  $("#csub").textContent="No camera";
+  camMsg(e&&e.name==="NotAllowedError"?"Camera access was blocked. Allow the camera for this page in the address bar and press Flip, or use Upload to send a photo instead.":e&&e.name==="NotFoundError"?"No camera was found on this device.":"The camera could not be started. Close other apps that use it and press Flip to try again.");
+ }
+}
+function closeC(){camOpen=false;camRun++;co.classList.remove("open");stopStream()}
+function openC(){camOpen=true;co.classList.add("open");$("#cq").value="";startStream()}
+function capture(){
+ if(!stream||!cvid.videoWidth)return;
+ if(busy){$("#csub").textContent="Wait for the current answer";return}
+ const w=cvid.videoWidth,h=cvid.videoHeight,k=Math.min(1,1024/Math.max(w,h)),c=document.createElement("canvas");
+ c.width=Math.round(w*k);c.height=Math.round(h*k);c.getContext("2d").drawImage(cvid,0,0,c.width,c.height);
+ const img=c.toDataURL("image/jpeg",.85),asked=$("#cq").value.trim();
+ closeC();send(asked||"What is in this frame?",img,asked);
+}
+function fileToFrame(f){return new Promise((ok,no)=>{const u=URL.createObjectURL(f),im=new Image();
+ im.onload=()=>{const k=Math.min(1,1024/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement("canvas");c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);ok(c.toDataURL("image/jpeg",.85))};
+ im.onerror=()=>{URL.revokeObjectURL(u);no()};im.src=u})}
+$("#cup").onclick=()=>$("#cfile").click();
+$("#cfile").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;
+ if(busy){$("#csub").textContent="Wait for the current answer";return}
+ try{const img=await fileToFrame(f),asked=$("#cq").value.trim();closeC();send(asked||"What is in this photo?",img,asked)}
+ catch(err){$("#csub").textContent="That file is not an image"}};
+$("#cam").onclick=openC;$("#cstop").onclick=closeC;$("#cshot").onclick=capture;
+$("#cflip").onclick=()=>{facing=facing==="environment"?"user":"environment";startStream()};
+$("#cq").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();capture()}});
 sessionId();render();

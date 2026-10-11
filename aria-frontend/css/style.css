@@ -113,6 +113,31 @@ body[data-mode=chat] #home{transform:translateX(-10%);opacity:0;pointer-events:n
 #tr{font-size:15px;color:#a9a69b;max-width:60ch}
 #vo .stop{border:1px solid #ebe8de;padding:11px 22px}
 #vo .stop:hover{background:#ebe8de;color:#14130f}
+/* camera */
+#co{position:fixed;inset:0;z-index:20;background:#14130f;color:#ebe8de;display:grid;grid-template-rows:auto 1fr auto;gap:16px;padding:20px 28px 24px;clip-path:circle(0% at 86% 94%);visibility:hidden;transition:clip-path .55s cubic-bezier(.6,0,.2,1),visibility 0s .55s}
+#co.open{clip-path:circle(150% at 86% 94%);visibility:visible;transition:clip-path .55s cubic-bezier(.6,0,.2,1),visibility 0s}
+#co .r{display:flex;justify-content:space-between}
+#co .vw{position:relative;min-height:0;display:flex;align-items:center;justify-content:center;background:#0b0b09;outline:1px solid #34322b}
+#cvid{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:block}
+#co .vw::before,#co .vw::after{content:"";position:absolute;width:26px;height:26px;border:2px solid #8a9bff;pointer-events:none}
+#co .vw::before{left:10px;top:10px;border-right:0;border-bottom:0}
+#co .vw::after{right:10px;bottom:10px;border-left:0;border-top:0}
+.cmsg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;color:#a9a69b;font-size:15px;line-height:1.5}
+.cmsg.on{display:flex}
+.cb{display:flex;gap:24px;align-items:end;justify-content:space-between}
+.cq{flex:1;max-width:60ch;border:0;border-bottom:1px solid #ebe8de;background:transparent;color:#ebe8de;font:500 18px var(--sans);padding:8px 0 10px;outline:0}
+.cq::placeholder{color:#6f6c63}
+.cq:focus{border-bottom:3px solid #8a9bff;padding-bottom:8px}
+.cbtn{display:flex;gap:8px}
+#cfile{display:none}
+.cbtn button{border:1px solid #ebe8de;padding:11px 20px;text-align:center}
+.cbtn button:hover{background:#ebe8de;color:#14130f}
+.cbtn .shot{background:#8a9bff;border-color:#8a9bff;color:#fff}
+.cbtn .shot:hover{background:#ebe8de;border-color:#ebe8de;color:#14130f}
+.cbtn button:disabled{opacity:.4;pointer-events:none}
+.u img{display:block;max-width:240px;width:100%;border-radius:8px;margin:0 0 8px}
+@media(max-width:900px){
+#co{padding:16px 16px 20px}.cb{flex-direction:column;align-items:stretch;gap:14px}.cq{max-width:none}.cbtn button{flex:1}}
 @media(max-width:900px){
 #top{padding:14px 18px}.st:not(:first-child){display:none}
 #stage{bottom:176px}
