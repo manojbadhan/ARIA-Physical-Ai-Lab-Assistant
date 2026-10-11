@@ -12,13 +12,17 @@ try:
 except ImportError:
     webrtcvad = None
  
-RATE = 48000
+RATE = 16000
 BLOCK = RATE * 30 // 1000       # 30 ms audio blocks (a size WebRTC VAD accepts)
+MIC_DEVICE = None               # None = system default; or a number/name from:  python -m sounddevice
+MIC_CHANNELS = 1                # normal mics: 1. ReSpeaker XVF3800 array: 2 (only the first channel is used,
+                                # and on that device it is the echo-cancelled one)
 MIC_THRESHOLD = None            # None = auto-calibrate; or set a number (see the level bar)
 VAD_AGGRESSIVENESS = 3          # 0-3; 3 is the strictest about calling something speech
-START_WINDOW, START_VOTES = 6, 4  # speech must appear in 4 of 6 blocks (~0.2 s) to start a question
+START_WINDOW, START_VOTES = 6, 5  # speech must appear in 5 of 6 blocks (~0.2 s) to start a question
 END_SILENCE_BLOCKS = 25         # ~0.75 s without speech ends the question
-MIN_VOICED_BLOCKS = 10          # need ~0.3 s of real speech, or the clip is thrown away
+MIN_VOICED_BLOCKS = 15          # need ~0.45 s of real speech, or the clip is thrown away
+MIN_SPEECH_RATIO = 0.3          # speech must fill at least 30% of the clip (noise bursts are sparse)
 MAX_RECORD_SECONDS = 30
 WAV_PATH = tempfile.gettempdir() + "/aria_input.wav"
  
@@ -42,12 +46,16 @@ class MicListener:
     def _on_audio(self, data, frames, time_info, status):
         if status:                       # sounddevice reports dropped audio here
             self.overflows += 1
-        self.q.put(data.copy())
+        self.q.put(data[:, :1].copy())
  
     def __enter__(self):
-        self._stream = sd.InputStream(samplerate=RATE, channels=1, dtype="int16",
+        self._stream = sd.InputStream(samplerate=RATE, channels=MIC_CHANNELS, dtype="int16", device=MIC_DEVICE,
                                       blocksize=BLOCK, callback=self._on_audio)
         self._stream.start()
+        try:
+            print(f"[mic] input device: {sd.query_devices(MIC_DEVICE, 'input')['name']}")
+        except Exception:
+            pass
         return self
  
     def __exit__(self, *exc):
@@ -61,7 +69,7 @@ class MicListener:
             except queue.Empty:
                 return
  
-    def calibrate(self, seconds=1.0):
+    def calibrate(self, seconds=2.0):
         """Measure room noise and set the loudness threshold from it."""
         levels, end = [], time.time() + seconds
         while time.time() < end:
@@ -70,7 +78,7 @@ class MicListener:
             except queue.Empty:
                 pass
         floor = float(np.median(levels)) if levels else 0.0
-        self.threshold = MIC_THRESHOLD or max(floor * 3, 200)
+        self.threshold = MIC_THRESHOLD or max(floor * 4, 300)
         print(f"[mic] noise floor {floor:.0f}, loudness threshold {self.threshold:.0f}")
  
     def _is_speech(self, block, level):
@@ -113,7 +121,11 @@ class MicListener:
                 if silent_run >= END_SILENCE_BLOCKS or len(chunks) * BLOCK > MAX_RECORD_SECONDS * RATE:
                     break
  
-        if not collecting or voiced < MIN_VOICED_BLOCKS:
+        if not collecting:
+            return None
+        active = max(len(chunks) - silent_run, 1)        # the clip without the trailing silence
+        if voiced < MIN_VOICED_BLOCKS or voiced / active < MIN_SPEECH_RATIO:
+            print(f"[mic] ignored a noise clip ({voiced} speech blocks out of {active})")
             return None
         if self.overflows > dropped_before:
             print("[mic] WARNING: audio was dropped while recording (CPU overloaded), "
