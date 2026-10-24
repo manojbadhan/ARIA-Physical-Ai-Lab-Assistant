@@ -1,0 +1,1 @@
+Optional. To self-host fonts, put Archivo (variable, wdth 62-125, wght 100-900) and DM Mono (400, 500) .woff2 files here, add @font-face rules to css/style.css, and remove the Google Fonts <link> from index.html.
