@@ -1,16 +1,16 @@
 import re
-# Spoken once at startup, after the mic is ready.
 GREETINGS = {
     "en": "Hey, it's ARIA. How can I help you?",
-    "hi": "नमस्ते! मैं आरिया हूँ। बताइए, मैं आपकी कैसे मदद कर सकती हूँ?",
+    "hi": {
+        "male": "नमस्ते! मैं आरिया हूँ। बताइए, मैं आपकी कैसे मदद कर सकता हूँ?",
+        "female": "नमस्ते! मैं आरिया हूँ। बताइए, मैं आपकी कैसे मदद कर सकती हूँ?",
+        "neutral": "नमस्ते! मैं आरिया हूँ। बताइए, आपकी मदद के लिए मैं यहाँ हूँ।",
+    },
 }
- 
-# Spoken when someone says only the wake word ("ARIA").
 WAKE_REPLIES = {
     "en": "Yes?",
     "hi": "जी, बताइए?",
 }
- 
 VOICE_RULES = (
     "VOICE MODE - these rules override any formatting or structure instructions above. "
     "You are ARIA, a friendly voice assistant who is also a lab assistant. Talk naturally "
@@ -23,38 +23,39 @@ VOICE_RULES = (
     "see through a camera. If a message begins with a [Camera ...] note, use it only when the "
     "question is about something the user is showing you; otherwise ignore it."
 )
- 
-# One rule per language; assistant.py picks the one matching LANGUAGE.
 LANGUAGE_RULES = {
-    "en": ("Always reply in English, even if the user's words look like another language. "
-           "If a message is garbled or makes no sense, say you didn't catch that and ask "
-           "them to repeat instead of guessing."),
-    "hi": ("Always reply in simple, everyday spoken Hindi written in Devanagari script. You are "
-           "female, so use feminine forms for yourself (जैसे: 'मैं बताती हूँ'). Write English "
-           "technical words in Devanagari too, for example मल्टीमीटर, कैलिपर, सर्वो मोटर, "
-           "because the speech engine reads Devanagari best. If a message is garbled or makes "
-           "no sense, say in Hindi that you didn't catch it and ask them to repeat, instead "
-           "of guessing."),
+    "en": ("Reply in English. If a message is garbled or makes no sense, say you didn't catch that "
+           "and ask them to repeat instead of guessing."),
+    "hi": ("Reply in simple, everyday spoken Hindi written in Devanagari script. Write English technical "
+           "words in Devanagari too, for example मल्टीमीटर, कैलिपर, सर्वो मोटर, because the speech engine "
+           "reads Devanagari best. If a message is garbled or makes no sense, say in Hindi that you didn't "
+           "catch it and ask them to repeat, instead of guessing."),
 }
- 
-# Words that suggest the question is about something in front of the camera.
+GENDER_RULES = {
+    "male": {
+        "en": "You are male. If asked, say you are an AI assistant with a male voice, named ARIA.",
+        "hi": "You are male. Always use masculine forms for yourself in Hindi (for example: 'मैं बताता हूँ', 'मैं कर सकता हूँ').",
+    },
+    "female": {
+        "en": "You are female. If asked, say you are an AI assistant with a female voice, named ARIA.",
+        "hi": "You are female. Always use feminine forms for yourself in Hindi (for example: 'मैं बताती हूँ', 'मैं कर सकती हूँ').",
+    },
+    "neutral": {
+        "en": "Never claim or imply a gender for yourself. If asked, say you are an AI assistant and have no gender.",
+        "hi": ("Never show a gender in Hindi. Avoid verb forms that change with gender (such as बताता/बताती, सकता/सकती). "
+               "Use wording like 'मैं यहाँ हूँ', 'बताइए', 'ठीक है', or impersonal phrasing. If asked, say you are an AI assistant "
+               "and have no gender."),
+    },
+}
 VISUAL_WORDS = {
-    # English
     "this", "that", "these", "those", "it", "holding", "hand", "see", "look",
     "camera", "showing", "front", "table", "desk", "bench",
-    # Hindi
     "यह", "ये", "वह", "वो", "इसे", "इसको", "इसका", "इसकी", "इसके", "उसे", "देखो", "देखिए",
     "देख", "हाथ", "कैमरा", "सामने", "मेज", "टेबल",
 }
- 
- 
 def _words(text):
-    # \w alone splits Devanagari words at vowel signs, so the Devanagari block is listed too
     return set(re.sub(r"[^\w\u0900-\u097F']+", " ", text.lower()).split())
- 
- 
 def build_message(query, objects):
-    """Normal chat by default. A camera note is added only for questions about what's in view."""
     if not VISUAL_WORDS & _words(query):
         return query
     if objects:
@@ -63,3 +64,8 @@ def build_message(query, objects):
         note = ("[Camera sees nothing recognizable. If the user is asking about something they hold "
                 "up, say you can't make it out and ask them to hold it closer.]")
     return f"{note}\n{query}"
+def greeting(language, gender):
+    value = GREETINGS[language]
+    return value if isinstance(value, str) else value.get(gender, value["neutral"])
+def system_rules(language, gender):
+    return " ".join((VOICE_RULES, LANGUAGE_RULES[language], GENDER_RULES.get(gender, GENDER_RULES["neutral"])[language]))

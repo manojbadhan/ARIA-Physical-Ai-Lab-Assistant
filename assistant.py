@@ -1,3 +1,6 @@
+import asyncio
+import difflib
+import gc
 import importlib
 import pkgutil
 import re
@@ -5,236 +8,323 @@ import threading
 import time
 import traceback
 from collections import deque
- 
+import numpy as np
+import sounddevice as sd
 from audio.listener import MicListener
-from chat.prompts2 import GREETINGS, LANGUAGE_RULES, VOICE_RULES, WAKE_REPLIES, build_message
+from chat.prompts2 import WAKE_REPLIES, build_message, greeting, system_rules
+from config import (
+    ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
+    EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, GREETING_LANGUAGE, HISTORY_MESSAGES, LANGUAGE,
+    MAX_COMPRESSION_RATIO, MAX_FOREIGN_RATIO, MAX_NO_SPEECH_PROB, MIN_AVG_LOGPROB, PAUSE_VISION_WHILE_SPEAKING,
+    STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
+    WAKE_WORD_REQUIRED, WAKE_WORDS,
+)
 from llm.prompts import SYSTEM_PROMPT
- 
-# --- language ----------------------------------------------------------------
-LANGUAGE = "hi"              # "hi" = Hindi (Devanagari), "en" = English
-STT_MODELS = {"hi": "whisper-large-v3"}   # more accurate than turbo for Hindi; English uses your config's model
-VOICE_KEYWORDS = {"hi": ("hindi", "hi-in", "/hi")}    # how a Hindi voice shows up in the voice list
- 
-# --- wake word: ARIA only answers when addressed -----------------------------
-# Whisper spells the name in different ways, so list the likely ones.
-WAKE_WORDS = ("aria", "arya", "ariya", "आरिया", "अरिया", "आर्या", "अर्या", "आरीया")
-ACTIVE_WINDOW = 12.0         # seconds after ARIA speaks during which no wake word is needed
-WAKE_RE = re.compile("|".join(re.escape(w) for w in WAKE_WORDS), re.IGNORECASE)
- 
-# --- speaker next to the mic: stop ARIA hearing herself ------------------------
-ECHO_TAIL = 0.8             # seconds the mic stays deaf after she stops talking (room echo; use ~1.5 for a Bluetooth speaker)
-ECHO_OVERLAP = 0.7          # if this share of the words heard was in her own recent speech, it was her echo
- 
+
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
-LISTENING = "LISTENING - say ARIA, then ask"
+LISTENING = "LISTENING - say ARIA, then ask" if WAKE_WORD_REQUIRED else "LISTENING - just ask"
 HEARING = "hearing you..."
-EXIT_WORDS = ("exit", "quit", "stop", "goodbye", "अलविदा", "बाय", "बाय बाय", "बंद करो", "रुको", "बस")
- 
-# --- speech-to-text filtering ------------------------------------------------
-MAX_NO_SPEECH_PROB = 0.6     # Whisper's own "this is probably silence" score
-MIN_AVG_LOGPROB = -1.2       # Whisper's confidence in its words (closer to 0 = more confident)
-MAX_COMPRESSION_RATIO = 2.4  # very repetitive text is a classic hallucination
-MAX_FOREIGN_RATIO = 0.2      # share of characters from a script we don't expect
- 
- 
+
 def find_class(package, name):
-    """Import the class `name` from whichever file in `package/` defines it."""
     for info in pkgutil.iter_modules(importlib.import_module(package).__path__):
         mod = importlib.import_module(f"{package}.{info.name}")
         if hasattr(mod, name):
             return getattr(mod, name)
     raise ImportError(f"No file in {package}/ defines {name}")
- 
- 
+
 def _get(obj, key, default=None):
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
- 
- 
+
+def is_devanagari(c):
+    return "\u0900" <= c <= "\u097f"
+
+def script_language(text):
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return "en"
+    return "hi" if sum(is_devanagari(c) for c in letters) / len(letters) > 0.3 else "en"
+
 def _trusted(seg):
     return ((_get(seg, "no_speech_prob", 0) or 0) <= MAX_NO_SPEECH_PROB
             and (_get(seg, "avg_logprob", 0) or 0) >= MIN_AVG_LOGPROB
             and (_get(seg, "compression_ratio", 0) or 0) <= MAX_COMPRESSION_RATIO)
- 
- 
+
 def _foreign_ratio(text):
-    """Share of characters outside the scripts we expect (Latin, plus Devanagari in Hindi mode)."""
     def expected(c):
-        return c.isascii() or (LANGUAGE == "hi" and "\u0900" <= c <= "\u097f")
+        return c.isascii() or (LANGUAGE in ("hi", "auto") and is_devanagari(c))
     return sum(not expected(c) for c in text) / len(text)
- 
- 
+
+def _whisper(stt, path, language):
+    kwargs = {"model": STT_MODELS.get(language, stt.model), "temperature": 0.0, "response_format": "verbose_json"}
+    if language != "auto":
+        kwargs["language"] = language
+    if STT_PROMPTS.get(language):
+        kwargs["prompt"] = STT_PROMPTS[language]
+    with open(path, "rb") as audio_file:
+        return stt.client.audio.transcriptions.create(file=audio_file, **kwargs)
+    
+def _text_of(result):
+    segments = _get(result, "segments") or []
+    if not segments:
+        return (_get(result, "text", "") or "").strip()
+    text = " ".join((_get(s, "text", "") or "").strip() for s in segments if _trusted(s)).strip()
+    if not text:
+        said = " ".join((_get(s, "text", "") or "").strip() for s in segments).strip()
+        print(f"[stt] dropped low-confidence: {said!r}")
+    return text
+
+def _detected(result):
+    value = (_get(result, "language", "") or "").lower()
+    if value in ("en", "english"):
+        return "en"
+    if value in ("hi", "hindi", "ur", "urdu"):
+        return "hi"
+    return value or None
+
 def transcribe_speech(stt, path):
-    """
-    Same job as stt.transcribe(path) (it reuses your SpeechToText object's client), but the
-    language is fixed and it drops what Whisper "hears" in noise. Returns text or None.
-    Dropped results are printed as [stt] ... so you can tune the numbers above.
-    """
     if not hasattr(stt, "client"):
-        return stt.transcribe(path)
+        text = stt.transcribe(path)
+        return (text, script_language(text)) if text else (None, None)
     try:
-        with open(path, "rb") as audio_file:
-            result = stt.client.audio.transcriptions.create(
-                file=audio_file,
-                model=STT_MODELS.get(LANGUAGE, stt.model),
-                language=LANGUAGE,
-                temperature=0.0,
-                response_format="verbose_json",
-            )
-        segments = _get(result, "segments") or []
-        if segments:
-            text = " ".join((_get(s, "text", "") or "").strip() for s in segments if _trusted(s)).strip()
-            if not text:
-                said = " ".join((_get(s, "text", "") or "").strip() for s in segments).strip()
-                print(f"[stt] dropped low-confidence: {said!r}")
-                return None
-        else:                                        # no segment details returned
-            text = (_get(result, "text", "") or "").strip()
- 
+        result = _whisper(stt, path, LANGUAGE)
+        text = _text_of(result)
+        if LANGUAGE == "auto" and text:
+            detected = _detected(result)
+            arabic_script = any("\u0600" <= c <= "\u06ff" for c in text)
+            if detected not in (None, "en", "hi") and not arabic_script:
+                print(f"[stt] dropped: heard {detected}, only English and Hindi are accepted: {text!r}")
+                return None, None
+            if arabic_script or (detected == "hi" and script_language(text) == "en"):
+                text = _text_of(_whisper(stt, path, "hi"))
         if not text:
-            return None
+            return None, None
         if _foreign_ratio(text) > MAX_FOREIGN_RATIO:
             print(f"[stt] dropped wrong-language text: {text!r}")
-            return None
-        return text
+            return None, None
+        return text, (script_language(text) if LANGUAGE == "auto" else LANGUAGE)
     except Exception as error:
         print(f"[STT ERROR] {type(error).__name__}: {error}")
-        return None
- 
- 
+        return None, None
+    
 def _tokens(text):
-    # the Devanagari block is listed because \w alone splits Hindi words at vowel signs
     return re.sub(r"[^\w\u0900-\u097F]+", " ", text.lower()).split()
- 
- 
+
 def looks_like_echo(heard, spoken_texts):
-    """True if `heard` is mostly made of words ARIA herself just said (her voice came back into the mic)."""
     words = _tokens(heard)
-    if len(words) < 3:                     # too short to judge; "yes" or "ok" could be a real answer
+    if len(words) < 3:
         return False
     for text in spoken_texts:
         said = set(_tokens(text))
         if sum(w in said for w in words) / len(words) >= ECHO_OVERLAP:
             return True
     return False
- 
- 
+
+def _is_wake(word):
+    w = word.strip(" ,.!?।-'\"").lower()
+    if not w:
+        return False
+    if w in WAKE_WORDS:
+        return True
+    return w.isascii() and difflib.SequenceMatcher(None, w, "aria").ratio() >= WAKE_FUZZY_RATIO
+
 def apply_wake_word(query, now, active_until):
-    """
-    Returns the question to answer, "" if the user only said the wake word,
-    or None if the speech wasn't meant for ARIA and should be ignored.
-    """
-    woke = bool(WAKE_RE.search(query))
-    if not woke and now > active_until:
+    words = query.split()
+    woke = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
+    if not woke and WAKE_WORD_REQUIRED and now > active_until:
         return None
     if not woke:
         return query
-    return " ".join(WAKE_RE.sub(" ", query).split()).strip(" ,.!?।-")
- 
- 
-def choose_voice(tts):
-    """Switch your TextToSpeech to a voice for LANGUAGE, if the system has one."""
-    words = VOICE_KEYWORDS.get(LANGUAGE)
-    if not words:
-        return
+    kept = [w for i, w in enumerate(words) if not (i < WAKE_WORD_POSITION and _is_wake(w))]
+    return " ".join(kept).strip(" ,.!?।-")
+_SPEECH_MAP = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
+                             "\u2014": ", ", "\u2013": ", ", "\u2011": "-", "\u2026": "...", "\u00a0": " "})
+
+def clean_for_speech(text):
+    text = text.translate(_SPEECH_MAP)
+    text = re.sub(r"[*#`_]+", "", text)
+    text = "".join(c for c in text if c.isascii() or is_devanagari(c))
+    return " ".join(text.split())
+
+def choose_voice(tts, language):
+    words = VOICE_KEYWORDS.get(language, ())
+    gender_words = GENDER_VOICE_WORDS.get(ASSISTANT_GENDER, ())
     try:
-        for i, voice in enumerate(tts.engine.getProperty("voices")):
-            label = f"{voice.id} {voice.name}".lower()
-            if any(w in label for w in words):
-                tts.set_voice(i)
-                print(f"[tts] using voice: {voice.name}")
-                return
+        voices = list(tts.engine.getProperty("voices"))
     except Exception as error:
         print(f"[tts] could not list voices: {error}")
-    print("[tts] WARNING: no Hindi voice found. Pi: sudo apt install espeak-ng. "
-          "Windows: install the Hindi language pack. Until then she will mispronounce Hindi.")
- 
- 
+        return language == "en"
+    best = None
+    for i, voice in enumerate(voices):
+        label = f"{voice.id} {voice.name}".lower()
+        if words and not any(w in label for w in words):
+            continue
+        if gender_words and any(w in label for w in gender_words):
+            best = (i, voice)
+            break
+        best = best or (i, voice)
+    if best:
+        tts.set_voice(best[0])
+        print(f"[tts] system voice for {language}: {best[1].name}")
+        return True
+    return language == "en"
+
+def edge_available():
+    try:
+        import edge_tts
+        import miniaudio
+        return True
+    except ImportError as error:
+        print(f"[tts] online voices are not installed ({error}). Run: pip install edge-tts miniaudio")
+        return False
+    
+async def _edge_audio(text, voice):
+    import edge_tts
+    data = bytearray()
+    async for chunk in edge_tts.Communicate(text, voice, rate=EDGE_RATE, volume=EDGE_VOLUME).stream():
+        if chunk["type"] == "audio":
+            data += chunk["data"]
+    return bytes(data)
+
+def speak_edge(text, language):
+    import miniaudio
+    voices = EDGE_VOICES.get(ASSISTANT_GENDER) or EDGE_VOICES["male"]
+    mp3 = asyncio.run(asyncio.wait_for(_edge_audio(text, voices[language]), EDGE_TIMEOUT))
+    if not mp3:
+        raise RuntimeError("no audio came back")
+    rate = int(sd.query_devices(kind="output")["default_samplerate"])
+    decoded = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
+    sd.play(np.frombuffer(decoded.samples, dtype=np.int16), rate, latency="high")
+    sd.wait()
+
+def speak_system(box, tts_cls, text, language):
+    for attempt in (1, 2):
+        if box["language"] != language:
+            choose_voice(box["tts"], language)
+            box["language"] = language
+        started = time.time()
+        box["tts"].speak(text)
+        took = time.time() - started
+        if len(text) < 15 or took >= max(0.3, len(text) / FASTEST_SPEECH_CPS):
+            return
+        print(f"[tts] the speech engine came back after {took:.1f} s for {len(text)} characters, "
+              "so it did not really speak.")
+        if attempt == 1:
+            print("[tts] restarting it and trying again")
+            box["tts"] = None
+            gc.collect()
+            box["tts"] = tts_cls()
+            box["language"] = None
+    print("[tts] still silent after a restart. Check the Windows output device and the volume.")
+
+def say(box, tts_cls, text):
+    text = clean_for_speech(text)
+    if not text:
+        return
+    language = script_language(text)
+    if box["edge"]:
+        try:
+            speak_edge(text, language)
+            return
+        except Exception as error:
+            print(f"[tts] online voice failed ({type(error).__name__}: {error}); using the system voice")
+    if language == "hi" and not box["hindi_system"]:
+        print("[tts] cannot speak Hindi on this machine (no Hindi voice and no online voice).")
+        return
+    speak_system(box, tts_cls, text, language)
+
 class Session:
-    """State shared by the camera window (main thread) and the voice thread."""
- 
     def __init__(self):
         self.status = LOADING
         self.heard = ""
         self.quit = threading.Event()
-        self.detector = None     # set by main.py
-        self.mic = None          # set by voice_worker
- 
- 
+        self.detector = None
+        self.mic = None
+        
 def voice_worker(s):
+    global LANGUAGE
     try:
-        # built inside this thread so pyttsx3 is used from the thread that created it
         llm = find_class("llm", "LabAssistantLLM")()
         stt = find_class("audio", "SpeechToText")()
-        tts = find_class("audio", "TextToSpeech")()
-        choose_voice(tts)
+        tts_cls = find_class("audio", "TextToSpeech")
+        box = {"tts": tts_cls(), "language": None, "edge": TTS_ENGINE == "edge" and edge_available()}
+        box["hindi_system"] = hasattr(box["tts"], "engine") and choose_voice(box["tts"], "hi")
+        box["language"] = None
+        if LANGUAGE != "en" and not (box["edge"] or box["hindi_system"]):
+            LANGUAGE = "en"
+            print("[ARIA] No Hindi voice available, so Hindi is switched off and she will use English only.")
+        greet_language = LANGUAGE if LANGUAGE in ("en", "hi") else GREETING_LANGUAGE
+        if greet_language == "hi" and not (box["edge"] or box["hindi_system"]):
+            greet_language = "en"
+        print(f"[ARIA] language: {LANGUAGE} | voice: {ASSISTANT_GENDER}, "
+              + ("online neural voices" if box["edge"] else "system voices")
+              + " | wake word: "
+              + ("say ARIA first, then ask (12 s follow-up window)" if WAKE_WORD_REQUIRED else "off, answers everything"))
         history = []
         active_until = 0.0
-        spoken = deque(maxlen=3)        # what ARIA said most recently, to spot her own echo
- 
+        spoken = deque(maxlen=3)
         with MicListener() as mic:
             s.mic = mic
- 
             def speak(text):
                 nonlocal active_until
                 s.status = "speaking..."
                 spoken.append(text)
-                tts.speak(text)         # blocks until finished
-                time.sleep(ECHO_TAIL)   # let the room echo die away before listening again
-                mic.drain()             # drop audio recorded while ARIA was talking
+                if PAUSE_VISION_WHILE_SPEAKING and s.detector is not None:
+                    s.detector.paused = True
+                try:
+                    say(box, tts_cls, text)
+                finally:
+                    if s.detector is not None:
+                        s.detector.paused = False
+                time.sleep(ECHO_TAIL)
+                mic.drain()
                 active_until = time.time() + ACTIVE_WINDOW
                 s.status = LISTENING
- 
-            speak(GREETINGS[LANGUAGE])
-            s.status = CALIBRATING      # after the greeting, so her voice isn't counted as noise
+            speak(greeting(greet_language, ASSISTANT_GENDER))
+            s.status = CALIBRATING
             mic.calibrate()
             s.status = LISTENING
- 
             while not s.quit.is_set():
                 path = mic.listen(s.quit, on_speech_start=lambda: setattr(s, "status", HEARING))
                 if not path:
                     s.status = LISTENING
                     continue
- 
                 s.status = "transcribing..."
-                heard = transcribe_speech(stt, path)
+                heard, language = transcribe_speech(stt, path)
                 if not heard or len(heard.strip(" .!?।")) < 2:
+                    s.heard = "(could not make out any words)"
                     mic.drain()
                     s.status = LISTENING
                     continue
- 
                 if looks_like_echo(heard, spoken):
                     print(f"[echo] ignored (that was ARIA's own voice): {heard!r}")
+                    s.heard = "(ignored: her own echo)"
                     mic.drain()
                     s.status = LISTENING
                     continue
- 
                 query = apply_wake_word(heard, time.time(), active_until)
                 if query is None:
                     print(f"[wake] ignored (not addressed to ARIA): {heard!r}")
+                    s.heard = f"(ignored, no ARIA) {heard}"
                     s.status = LISTENING
                     continue
-                if query == "":                      # only the wake word
-                    speak(WAKE_REPLIES[LANGUAGE])
+                if query == "":
+                    speak(WAKE_REPLIES[language])
                     continue
- 
                 s.heard = query
-                print(f"\nYou: {query}")
- 
+                print(f"\nYou ({language}): {query}")
                 if query.lower().strip(" .!?।") in EXIT_WORDS:
-                    speak("Goodbye." if LANGUAGE == "en" else "अलविदा!")
+                    speak("Goodbye." if language == "en" else "अलविदा!")
                     s.quit.set()
                     break
- 
                 objects = s.detector.stable_labels()
                 print(f"[camera sees: {', '.join(objects) or 'nothing recognizable'}]")
- 
                 s.status = "thinking..."
                 reply = llm.generate_response(
                     user_message=build_message(query, objects),
-                    system_prompt=SYSTEM_PROMPT + "\n\n" + VOICE_RULES + " " + LANGUAGE_RULES[LANGUAGE],
+                    system_prompt=SYSTEM_PROMPT + "\n\n" + system_rules(language, ASSISTANT_GENDER),
                     conversation_history=history,
-                    max_history_turns=20,       # last 10 exchanges, so follow-ups make sense
+                    max_history_turns=HISTORY_MESSAGES,
                 )
                 history += [{"role": "user", "content": query},
                             {"role": "assistant", "content": reply}]

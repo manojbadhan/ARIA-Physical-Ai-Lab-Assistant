@@ -10,7 +10,8 @@ ARIA is a voice assistant that can see. A camera window shows live object detect
 - **Listens hands-free:** no buttons. She waits for her name ("ARIA"), then keeps listening for 12 seconds for follow-ups.
 - **Understands:** speech is turned into text with Groq Whisper, with noise and wrong-language results filtered out.
 - **Thinks:** the question, plus the objects the camera sees, goes to an LLM on Groq.
-- **Speaks:** the answer is read aloud with text-to-speech. English works out of the box; Hindi works when the machine has a Hindi voice.
+- **Follows your language:** ask in Hindi and she answers in Hindi, ask in English and she answers in English, question by question.
+- **Speaks:** the answer is read aloud in a male voice by default (you can set a female voice, or tell her not to claim a gender). If the online voice is unavailable she falls back to the voices installed on the machine.
 - **Shows what she heard:** the window prints the status (listening, hearing you, thinking, speaking) and the text she understood, and draws a microphone level bar.
 
 ## How it works
@@ -37,7 +38,8 @@ The camera window runs in the main thread. The voice loop runs in its own thread
 | Language model | Groq Chat Completions API, model `openai/gpt-oss-120b` (`GROQ_MODEL` in `config.py`), called through the `groq` Python SDK | Groq cloud | `llm/model.py` |
 | Speech-to-text | Groq Audio Transcriptions API, Whisper `whisper-large-v3-turbo` (`STT_MODEL` in `config.py`); `whisper-large-v3` is used when `LANGUAGE = "hi"` | Groq cloud | `audio/stt.py`, `assistant.py` |
 | Object detection | Ultralytics YOLO11 (`yolo11s.pt`) on PyTorch | your machine | `vision/live_detector.py` |
-| Text-to-speech | `pyttsx3` (Windows SAPI5 voices; eSpeak NG on Linux and Raspberry Pi) | your machine | `audio/tts.py` |
+| Text-to-speech (main) | Microsoft Edge neural voices through the `edge-tts` package: `en-IN-PrabhatNeural` for English and `hi-IN-MadhurNeural` for Hindi (male); `en-IN-NeerjaNeural` and `hi-IN-SwaraNeural` if you choose female. The audio is decoded with `miniaudio` and played with `sounddevice` | Microsoft online service | `assistant.py` |
+| Text-to-speech (fallback) | `pyttsx3` (Windows SAPI5 voices; eSpeak NG on Linux and Raspberry Pi), with the voice chosen by language and gender | your machine | `audio/tts.py` |
 | Microphone input | `sounddevice` (PortAudio) | your machine | `audio/listener.py` |
 | Voice detection | WebRTC VAD (`webrtcvad-wheels`) plus a `numpy` loudness check | your machine | `audio/listener.py` |
 | Camera and window | OpenCV | your machine | `main.py`, `vision/display.py` |
@@ -55,12 +57,13 @@ Only the language model and the speech-to-text need the internet, and both use t
 
 - The recorded question (a short WAV file, overwritten each time in the system temp folder) goes to Groq for transcription.
 - The transcribed text, the recent conversation, and the **names** of the objects seen (for example "bottle, cell phone") go to Groq's language model.
+- The text of each reply goes to Microsoft's online speech service to be turned into audio. Set `TTS_ENGINE = "system"` in `config.py` to keep speech fully on the machine.
 - Camera images are never sent anywhere. Detection runs locally and only the object names are shared.
 
 ### Configured but not used yet
 
 - **RAG settings** already in `config.py`: `all-MiniLM-L6-v2` embeddings (sentence-transformers), notes read from `notes/`, chunks of 400 characters with 50 overlap, top 3 results, a similarity threshold of 0.35, and the index saved under `rag/store/`. `llm/prompts.py` also has a `RAG_SYSTEM_PROMPT`. None of this is connected to `main.py` until the `rag/` code is added.
-- **Hindi voice options** that were considered but are not used: Sarvam AI's speech APIs and `edge-tts`.
+- **Sarvam AI's speech APIs** were considered as another option for Hindi and Hinglish, but are not used.
 
 ## Project structure
 
@@ -68,7 +71,7 @@ Only the language model and the speech-to-text need the internet, and both use t
 minor_project/
 ├── main.py                 starts the camera window, the detector and the voice thread
 ├── assistant.py            the voice loop: listen -> wake word -> speech-to-text -> LLM -> speech
-├── config.py               API key and model names (reads .env)
+├── config.py               ALL settings: API key, models, wake word, mic, camera, detection
 ├── .env                    GROQ_API_KEY=...   (never commit this)
 ├── requirements.txt
 ├── yolo11s.pt              YOLO weights
@@ -98,7 +101,7 @@ minor_project/
 1. Install the packages:
 
    ```
-   pip install opencv-python ultralytics numpy sounddevice webrtcvad-wheels pyttsx3 groq python-dotenv
+   pip install opencv-python ultralytics numpy sounddevice webrtcvad-wheels pyttsx3 groq python-dotenv edge-tts miniaudio
    ```
 
    Put the same packages in `requirements.txt`. `webrtcvad-wheels` is the voice detector. Without it ARIA still runs, but she picks up much more background noise.
@@ -132,19 +135,24 @@ sudo apt install espeak-ng libportaudio2
 
 Questions with words like "this", "it", "holding" or "in front" get the camera's objects added automatically. Everything else is normal conversation.
 
-## Settings you may want to change
+## Settings
 
-| File | Setting | What it does |
-|---|---|---|
-| `assistant.py` | `LANGUAGE` | `"en"` or `"hi"`. Hindi needs a Hindi voice on the machine; without one she falls back to English. |
-| `assistant.py` | `WAKE_WORD_REQUIRED` | `False` makes her answer everything she hears. |
-| `assistant.py` | `WAKE_WORDS`, `ACTIVE_WINDOW` | Accepted spellings of her name, and the follow-up window in seconds. |
-| `assistant.py` | `ECHO_TAIL` | Seconds the mic stays deaf after she speaks. Use about 1.5 for a Bluetooth speaker. |
-| `audio/listener.py` | `MIC_DEVICE`, `MIC_CHANNELS` | Which microphone to use. `python -m sounddevice` lists devices. |
-| `audio/listener.py` | `MIC_THRESHOLD`, `VAD_AGGRESSIVENESS` | Loudness bar and strictness of the voice detector. |
-| `vision/live_detector.py` | `YOLO_WEIGHTS`, `CONF`, `IMGSZ`, `IGNORE_LABELS` | Model, confidence, detection size, and labels to ignore (`person` by default). |
-| `main.py` | `CAMERA_INDEX`, `DETECT_FPS` | Which camera, and how often a frame is given to YOLO. |
-| `chat/prompts2.py` | `GREETINGS`, `VOICE_RULES`, `LANGUAGE_RULES` | How she greets you and how she talks. |
+Every tunable value lives in **`config.py`**, so you do not need to edit the code files. Only the wording of the greeting and the spoken-style rules is in `chat/prompts2.py`, next to the other prompts.
+
+| Section in `config.py` | Main settings |
+|---|---|
+| Keys and models | `GROQ_API_KEY` (from `.env`), `GROQ_MODEL`, `STT_MODEL` |
+| Language and persona | `LANGUAGE` (`"auto"` follows each question; or fix `"en"` / `"hi"`), `GREETING_LANGUAGE`, `ASSISTANT_GENDER` (`"male"`, `"female"` or `"neutral"`), `STT_MODELS`, `STT_PROMPTS` |
+| Voice | `TTS_ENGINE` (`"edge"` or `"system"`), `EDGE_VOICES`, `EDGE_RATE`, `EDGE_VOLUME`, `EDGE_TIMEOUT`, `VOICE_KEYWORDS`, `GENDER_VOICE_WORDS`, `PAUSE_VISION_WHILE_SPEAKING` |
+| Wake word | `WAKE_WORD_REQUIRED`, `WAKE_WORDS`, `WAKE_FUZZY_RATIO`, `WAKE_WORD_POSITION`, `ACTIVE_WINDOW`, `EXIT_WORDS` |
+| Conversation | `HISTORY_MESSAGES` |
+| Speaker next to the mic | `ECHO_TAIL` (about 1.5 for Bluetooth), `ECHO_OVERLAP`, `FASTEST_SPEECH_CPS` |
+| Speech-to-text filtering | `MAX_NO_SPEECH_PROB`, `MIN_AVG_LOGPROB`, `MAX_COMPRESSION_RATIO`, `MAX_FOREIGN_RATIO` |
+| Microphone | `MIC_DEVICE`, `MIC_CHANNELS`, `MIC_THRESHOLD`, `CALIBRATION_SECONDS`, `THRESHOLD_FACTOR_VAD`, `MIN_THRESHOLD`, `VAD_AGGRESSIVENESS`, `START_WINDOW`, `START_VOTES`, `END_SILENCE_BLOCKS`, `MIN_VOICED_BLOCKS`, `MIN_SPEECH_RATIO`, `MAX_RECORD_SECONDS` |
+| Camera and detection | `CAMERA_INDEX`, `FRAME_SIZE_PC/PI`, `DETECT_FPS_PC/PI`, `YOLO_WEIGHTS`, `YOLO_CONF`, `YOLO_IMGSZ`, `YOLO_IGNORE_LABELS`, `DETECT_HISTORY`, `STABLE_MIN_COUNT` |
+| RAG (not connected yet) | `EMBEDDING_MODEL_NAME`, `NOTES_DIR`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `SIMILARITY_THRESHOLD`, store paths |
+
+The Raspberry Pi values (`FRAME_SIZE_PI`, `DETECT_FPS_PI`) are used automatically when the program detects a Pi.
 
 ## Troubleshooting
 
@@ -153,19 +161,23 @@ The terminal prints a tagged line for almost every decision, so read it first.
 | What you see | Meaning and fix |
 |---|---|
 | Replies print but you hear nothing | The speech engine went silent. ARIA detects this, prints `[tts] ... did not really speak`, restarts the engine and retries. If it says `still silent after a restart`, check the Windows output device and volume. |
-| Status never leaves `LISTENING` and the mic bar never crosses the red tick | Mic level too low. Set `MIC_THRESHOLD` lower, and check the `[mic] input device:` line. |
+| Status never leaves `LISTENING` and the mic bar never crosses the red tick | Mic level too low. Set `MIC_THRESHOLD` (in `config.py`) lower, and check the `[mic] input device:` line. |
 | `[mic] sound reached X but the speech threshold is Y` | Your voice is just under the threshold. Set `MIC_THRESHOLD` to the suggested value. |
-| `(ignored, no ARIA) ...` on screen, or `[wake] ignored` | She did not hear her name. Say "ARIA, ..." first, or add the spelling Whisper produced to `WAKE_WORDS`. |
+| `(ignored, no ARIA) ...` on screen, or `[wake] ignored` | She did not hear her name. Say "ARIA, ..." first, or add the spelling Whisper produced to `WAKE_WORDS` in `config.py`. |
 | `[stt] dropped low-confidence` or `dropped wrong-language` | Speech-to-text distrusted the result and threw it away. This is the noise filter working. |
 | `[echo] ignored` | She heard her own voice and ignored it. Move the mic away from the speaker. |
-| `[mic] WARNING: audio was dropped` | The CPU is overloaded. Lower `DETECT_FPS` or use smaller YOLO weights. |
-| `[tts] No Hindi voice installed` | Install a Hindi voice (Pi: `espeak-ng`; Windows: a Hindi speech voice), or keep `LANGUAGE = "en"`. |
+| `[mic] WARNING: audio was dropped` | The CPU is overloaded. Lower `DETECT_FPS_PI` / `DETECT_FPS_PC` in `config.py` or use smaller YOLO weights. |
+| `[tts] No Hindi voice installed` | Install a Hindi voice (Pi: `espeak-ng`; Windows: a Hindi speech voice), or keep `LANGUAGE = "en"` in `config.py`. |
+| `[tts] online voice failed ...` | The online voice could not be reached (no internet, or the service changed). She fell back to a system voice. If Hindi then goes silent, install a Hindi voice or fix the connection. |
+| Hindi sounds like it has an English accent | An English voice is reading Hindi. That happens only on the system-voice fallback with no Hindi voice installed. Check the `[tts] system voice for hi:` line, and make sure `edge-tts` and `miniaudio` are installed so the Hindi neural voice is used. |
+| Crackly or choppy voice | Speech competes with the camera for CPU. `PAUSE_VISION_WHILE_SPEAKING = True` (the default) pauses detection while she talks. If it still crackles, lower the speaker volume, check for dropped audio warnings, or use a lighter YOLO model. |
+| She uses the wrong gender in Hindi | Set `ASSISTANT_GENDER` in `config.py`. Hindi verbs change with gender, so `"male"` and `"female"` use matching verb forms; `"neutral"` avoids them. |
 | Voice comes out of the wrong speaker | She uses the system's default output. Change the default output device, then restart ARIA. |
 
 ## Hardware notes
 
 - **Speaker next to the microphone.** ARIA already ignores the mic while she speaks, and filters echo by comparing what she heard with what she just said. For the best result, separate the mic from the speaker physically, or use a USB mic array with built-in echo cancellation and play her voice through it.
-- **Bluetooth speakers** work as the output only if they are the system default, and they add delay, so raise `ECHO_TAIL`. They cannot be used with a hardware echo-cancelling array.
+- **Bluetooth speakers** work as the output only if they are the system default, and they add delay, so raise `ECHO_TAIL` in `config.py`. They cannot be used with a hardware echo-cancelling array.
 
 ## Limitations
 
@@ -173,7 +185,8 @@ The terminal prints a tagged line for almost every decision, so read it first.
 - She cannot be interrupted while speaking.
 - Anything said while she is thinking or speaking is dropped.
 - `yolo11s.pt` only knows the 80 everyday COCO objects (bottle, phone, scissors and so on). It does not know lab tools until you train custom weights.
-- Offline Hindi voices sound robotic.
+- The best voices need internet and use Microsoft's online speech service through an unofficial package (`edge-tts`), which can stop working if Microsoft changes the service. The offline fallback voices sound more robotic, and Hindi needs a Hindi voice installed to work offline.
+- In Hindi mode she needs Hindi speech detected as Hindi. Mixed Hindi-English sentences are treated as one language per question.
 - Whisper can mishear Hindi-English mixed sentences.
 
 ## Roadmap
@@ -183,4 +196,4 @@ The terminal prints a tagged line for almost every decision, so read it first.
 - Knowing which lab she is in (ask the teacher, or read a printed marker).
 - Surveillance rules and an event log.
 - Web dashboard and Raspberry Pi packaging.
-- Higher-quality Hindi and Hinglish speech.
+- Fully offline speech output, and better handling of mixed Hindi-English sentences.
