@@ -11,13 +11,14 @@ from collections import deque
 import numpy as np
 import sounddevice as sd
 from audio.listener import MicListener
+from vision.gemini_vision import analyze
 from chat.prompts2 import WAKE_REPLIES, build_message, greeting, system_rules
 from config import (
     ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
     EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, GREETING_LANGUAGE, HISTORY_MESSAGES, LANGUAGE,
     MAX_COMPRESSION_RATIO, MAX_FOREIGN_RATIO, MAX_NO_SPEECH_PROB, MIN_AVG_LOGPROB, PAUSE_VISION_WHILE_SPEAKING,
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
-    WAKE_WORD_REQUIRED, WAKE_WORDS,
+    WAKE_WORD_REQUIRED, WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
 )
 from llm.prompts import SYSTEM_PROMPT
 
@@ -38,6 +39,18 @@ def _get(obj, key, default=None):
 
 def is_devanagari(c):
     return "\u0900" <= c <= "\u097f"
+
+HINDI_WORDS = {"है", "हैं", "क्या", "मैं", "मुझे", "को", "का", "की", "के", "में", "से", "कर", "करो",
+               "तो", "नहीं", "और", "यह", "वह", "था", "हो", "रहा", "रही", "आप", "तुम", "कैसे", "कौन",
+               "क्यों", "कब", "कहाँ", "बताओ", "बताइए", "पर", "भी", "ही"}
+
+def _hindi_ok(text):
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < HINDI_MIN_LETTERS:
+        return False
+    if sum(is_devanagari(c) for c in letters) / len(letters) < HINDI_MIN_DEVA_RATIO:
+        return False
+    return any(w in HINDI_WORDS for w in _tokens(text))
 
 def script_language(text):
     letters = [c for c in text if c.isalpha()]
@@ -93,10 +106,13 @@ def transcribe_speech(stt, path):
             detected = _detected(result)
             arabic_script = any("\u0600" <= c <= "\u06ff" for c in text)
             if detected not in (None, "en", "hi") and not arabic_script:
-                print(f"[stt] dropped: heard {detected}, only English and Hindi are accepted: {text!r}")
-                return None, None
+                print(f"[stt] heard {detected}, retrying as English: {text!r}")
+                text = _text_of(_whisper(stt, path, "en"))
             if arabic_script or (detected == "hi" and script_language(text) == "en"):
                 text = _text_of(_whisper(stt, path, "hi"))
+        if LANGUAGE == "auto" and text and script_language(text) == "hi" and not _hindi_ok(text):
+            print(f"[stt] weak Hindi, retrying as English: {text!r}")
+            text = _text_of(_whisper(stt, path, "en"))
         if not text:
             return None, None
         if _foreign_ratio(text) > MAX_FOREIGN_RATIO:
@@ -240,6 +256,19 @@ class Session:
         self.quit = threading.Event()
         self.detector = None
         self.mic = None
+        self.frame = None          
+        self.last_vision = {"mode": None, "text": "", "ts": 0}
+
+def vision_intent(query):
+    t = query.lower()
+    words = set(re.findall(r"[a-z']+", t))
+    if ("read" in words or "written" in words or "writing" in words) \
+       or "what does it say" in t or "what does this say" in t:
+        return "ocr"
+    if any(p in t for p in ("what is this", "what's this", "what is that", "what's that",
+                            "what am i holding", "in my hand", "identify", "what do you see", "look at this")):
+        return "identify"
+    return None
         
 def voice_worker(s):
     global LANGUAGE
@@ -318,6 +347,19 @@ def voice_worker(s):
                     s.quit.set()
                     break
                 objects = s.detector.stable_labels()
+                mode = vision_intent(query)
+                if mode:
+                    if s.frame is None:
+                        speak("I can't see anything yet.")
+                        continue
+                    s.status = "looking..."
+                    reply = analyze(s.frame.copy(), mode)
+                    s.last_vision = {"mode": mode, "text": reply, "ts": time.time()}
+                    history += [{"role": "user", "content": query},
+                                {"role": "assistant", "content": reply}]
+                    print(f"ARIA (vision/{mode}): {reply}")
+                    speak(reply)
+                    continue
                 print(f"[camera sees: {', '.join(objects) or 'nothing recognizable'}]")
                 s.status = "thinking..."
                 reply = llm.generate_response(

@@ -6,6 +6,12 @@ from collections import deque
  
 import numpy as np
 import sounddevice as sd
+from config import (
+    MIC_DEVICE, MIC_CHANNELS, MIC_THRESHOLD, VAD_AGGRESSIVENESS,
+    START_WINDOW, START_VOTES, END_SILENCE_BLOCKS, MIN_VOICED_BLOCKS,
+    MIN_SPEECH_RATIO, MAX_RECORD_SECONDS, CALIBRATION_SECONDS,
+    THRESHOLD_FACTOR_VAD, THRESHOLD_FACTOR_NO_VAD, MIN_THRESHOLD,
+)
  
 try:
     import webrtcvad
@@ -14,16 +20,7 @@ except ImportError:
  
 RATE = 16000
 BLOCK = RATE * 30 // 1000       # 30 ms audio blocks (a size WebRTC VAD accepts)
-MIC_DEVICE = None               # None = system default; or a number/name from:  python -m sounddevice
-MIC_CHANNELS = 1                # normal mics: 1. ReSpeaker XVF3800 array: 2 (only the first channel is used,
-                                # and on that device it is the echo-cancelled one)
-MIC_THRESHOLD = None            # None = auto-calibrate; or set a number (see the level bar)
-VAD_AGGRESSIVENESS = 3          # 0-3; 3 is the strictest about calling something speech
-START_WINDOW, START_VOTES = 6, 5  # speech must appear in 5 of 6 blocks (~0.2 s) to start a question
-END_SILENCE_BLOCKS = 25         # ~0.75 s without speech ends the question
-MIN_VOICED_BLOCKS = 15          # need ~0.45 s of real speech, or the clip is thrown away
-MIN_SPEECH_RATIO = 0.3          # speech must fill at least 30% of the clip (noise bursts are sparse)
-MAX_RECORD_SECONDS = 30
+
 WAV_PATH = tempfile.gettempdir() + "/aria_input.wav"
  
  
@@ -69,8 +66,10 @@ class MicListener:
             except queue.Empty:
                 return
  
-    def calibrate(self, seconds=2.0):
-        """Measure room noise and set the loudness threshold from it."""
+    def calibrate(self, seconds=None):
+        
+        self.drain()                     # throw away audio queued during the greeting
+        seconds = seconds or CALIBRATION_SECONDS
         levels, end = [], time.time() + seconds
         while time.time() < end:
             try:
@@ -78,9 +77,10 @@ class MicListener:
             except queue.Empty:
                 pass
         floor = float(np.median(levels)) if levels else 0.0
-        self.threshold = MIC_THRESHOLD or max(floor * 4, 300)
+        factor = THRESHOLD_FACTOR_VAD if self._vad else THRESHOLD_FACTOR_NO_VAD
+        self.threshold = MIC_THRESHOLD or max(floor * factor, MIN_THRESHOLD)
         print(f"[mic] noise floor {floor:.0f}, loudness threshold {self.threshold:.0f}")
- 
+    
     def _is_speech(self, block, level):
         if level <= self.threshold:
             return False
