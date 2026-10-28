@@ -3,16 +3,24 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-# Locate the project and trained model
+
+# Locate the project and the new trained OBB model
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 MODEL_PATH = (
     PROJECT_ROOT
+    / "vision"
+    / "Datasets"
+    / "aria_combined_obb_dataset"
     / "runs"
-    / "detect"
-    / "aria_baseline"
+    / "obb"
+    / "runs"
+    / "obb"
+    / "aria_objects-2"
     / "weights"
     / "best.pt"
 )
+
 
 if not MODEL_PATH.exists():
     raise FileNotFoundError(f"Trained model not found: {MODEL_PATH}")
@@ -47,7 +55,7 @@ try:
         results = model.predict(
                source=frame,
                imgsz=640,
-               conf=0.25,
+               conf=0.65,
                device=0,
                verbose=False,
            )

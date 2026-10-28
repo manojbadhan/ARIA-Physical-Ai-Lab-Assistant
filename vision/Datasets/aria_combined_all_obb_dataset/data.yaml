@@ -1,0 +1,19 @@
+path: .
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: Arduino
+  1: Battery
+  2: Display
+  3: Esp32
+  4: Motor
+  5: sensor
+  6: nail
+  7: screw
+  8: screwdriver
+  9: cap
+  10: goggles
+  11: no_goggles
+  12: pen
