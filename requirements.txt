@@ -10,3 +10,6 @@ pyzbar
 SpeechRecognition
 pyttsx3
 sounddevice
+PySide6
+
+

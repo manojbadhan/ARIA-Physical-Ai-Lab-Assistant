@@ -24,3 +24,9 @@ notes/
 .vscode/
 .idea/
 *.log
+# Large AI models
+*.onnx
+*.bin
+
+# Temporary files
+last_vision.jpg

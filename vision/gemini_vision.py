@@ -3,7 +3,10 @@ import cv2
 from google import genai
 from google.genai import types
 
+# Primary model first, lighter fallback second. Override with env vars if needed.
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
+MODELS = [m for m in (MODEL_NAME, FALLBACK_MODEL) if m]
 _client = None
 
 PROMPTS = {
@@ -19,6 +22,9 @@ PROMPTS = {
     ),
 }
 
+# Errors worth trying the other model for (overloaded / rate limited / timeout)
+_RETRYABLE = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "overloaded", "DEADLINE")
+
 
 def _get_client():
     global _client
@@ -32,19 +38,27 @@ def _get_client():
 
 def analyze(frame, mode="identify"):
     h, w = frame.shape[:2]
-    if w > 1024:
-        frame = cv2.resize(frame, (1024, int(h * 1024 / w)))
-    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    max_w = 1600 if mode == "ocr" else 1024
+    if w > max_w:
+        frame = cv2.resize(frame, (max_w, int(h * max_w / w)))
+    cv2.imwrite("last_vision.jpg", frame)   # debug: exactly what Gemini receives
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     if not ok:
         return "Could not encode image."
-    try:
-        resp = _get_client().models.generate_content(
-            model=MODEL_NAME,
-            contents=[
-                PROMPTS[mode],
-                types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"),
-            ],
-        )
-        return resp.text or "No response from model."
-    except Exception as e:
-        return f"Vision request failed: {e}"
+
+    contents = [
+        PROMPTS[mode],
+        types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"),
+    ]
+    last_error = None
+    for model in MODELS:
+        try:
+            resp = _get_client().models.generate_content(model=model, contents=contents)
+            return resp.text or "No response from model."
+        except Exception as e:
+            last_error = e
+            if any(tag in str(e) for tag in _RETRYABLE):
+                print(f"[vision] {model} busy, trying next model")
+                continue
+            break
+    return f"Vision request failed: {last_error}"

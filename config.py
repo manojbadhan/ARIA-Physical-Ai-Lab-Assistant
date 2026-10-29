@@ -28,7 +28,7 @@ EDGE_VOICES = {
 }
 EDGE_RATE = "+0%"
 EDGE_VOLUME = "+0%"
-EDGE_TIMEOUT = 20
+EDGE_TIMEOUT = 15
 VOICE_KEYWORDS = {"en": ("english", "en-", "/en"), "hi": ("hindi", "hi-in", "/hi")}
 GENDER_VOICE_WORDS = {
     "male": ("david", "mark", "george", "ravi", "hemant", "madhur", "prabhat", "guy", "male"),
