@@ -11,6 +11,7 @@ import time
 import traceback
 import wave
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import sounddevice as sd
 from audio.listener import MicListener
@@ -29,6 +30,11 @@ LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
 LISTENING = "LISTENING - say ARIA, then ask" if WAKE_WORD_REQUIRED else "LISTENING - just ask"
 HEARING = "hearing you..."
+
+# ---------------------------------------------------------------- conversation mode
+# After ARIA answers, the user can keep talking WITHOUT saying "ARIA" for this long.
+CONVO_WINDOW = max(ACTIVE_WINDOW, 45)      # seconds, after a normal answer
+FOLLOWUP_WINDOW = 90                       # seconds, when ARIA's reply ends with a question
 
 # ---------------------------------------------------------------- Piper (offline neural voice)
 _PIPER = {}
@@ -52,7 +58,8 @@ def piper_available():
     return True
 
 
-def speak_piper(text, language):
+def piper_fetch(text, language):
+    """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
     from piper import PiperVoice
     if language not in _PIPER:                      # load once, reuse
         _PIPER[language] = PiperVoice.load(os.path.expanduser(PIPER_MODELS[language]))
@@ -74,8 +81,7 @@ def speak_piper(text, language):
         n = int(len(audio) * out_rate / rate)
         audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
                           np.arange(len(audio)), audio).astype(np.int16)
-    sd.play(audio, out_rate, latency="high")
-    sd.wait()
+    return audio, out_rate
 
 
 # ---------------------------------------------------------------- helpers
@@ -203,8 +209,14 @@ def looks_like_echo(heard, spoken_texts):
     return False
 
 
+# ---------------------------------------------------------------- wake word
+def _clean_word(word):
+    return word.strip(" ,.!?।-'\"").lower()
+
+
 def _is_wake(word):
-    w = word.strip(" ,.!?।-'\"").lower()
+    """Exact or fuzzy match. Used for the first few words of a sentence."""
+    w = _clean_word(word)
     if not w:
         return False
     if w in WAKE_WORDS:
@@ -212,13 +224,22 @@ def _is_wake(word):
     return w.isascii() and difflib.SequenceMatcher(None, w, "aria").ratio() >= WAKE_FUZZY_RATIO
 
 
-def apply_wake_word(query, now, active_until):
+def _is_wake_exact(word):
+    """Exact match only. Used for ARIA anywhere else in the sentence (no fuzzy = fewer false wakes)."""
+    w = _clean_word(word)
+    return bool(w) and w in WAKE_WORDS
+
+
+def apply_wake_word(query, started_at, active_until):
+    """started_at = when the user STARTED speaking (not when transcription finished).
+    Inside the conversation window no wake word is needed."""
     words = query.split()
-    woke = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
-    if not woke and WAKE_WORD_REQUIRED and now > active_until:
+    lead = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
+    anywhere = lead or any(_is_wake_exact(w) for w in words)
+    if not anywhere and WAKE_WORD_REQUIRED and started_at > active_until:
         return None
-    if not woke:
-        return query
+    if not lead:
+        return query                      # keep "ARIA" if it was said at the end, it is part of the question
     kept = [w for i, w in enumerate(words) if not (i < WAKE_WORD_POSITION and _is_wake(w))]
     return " ".join(kept).strip(" ,.!?।-")
 
@@ -230,9 +251,23 @@ _SPEECH_MAP = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201
 
 def clean_for_speech(text):
     text = text.translate(_SPEECH_MAP)
+    text = re.sub(r"https?://\S+|www\.\S+", "", text)      # never read links aloud
     text = re.sub(r"[*#`_]+", "", text)
     text = "".join(c for c in text if c.isascii() or is_devanagari(c))
     return " ".join(text.split())
+
+
+def split_sentences(text):
+    """One chunk per sentence (very short ones are merged), so audio starts after the first sentence
+    and every online request is short enough not to time out."""
+    parts = [p for p in re.split(r"(?<=[.!?।])\s+", text.strip()) if p]
+    chunks = []
+    for p in parts:
+        if chunks and len(chunks[-1]) < 40:
+            chunks[-1] += " " + p
+        else:
+            chunks.append(p)
+    return chunks
 
 
 def choose_voice(tts, language):
@@ -278,7 +313,8 @@ async def _edge_audio(text, voice):
     return bytes(data)
 
 
-def speak_edge(text, language):
+def edge_fetch(text, language):
+    """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
     import miniaudio
     voices = EDGE_VOICES.get(ASSISTANT_GENDER) or EDGE_VOICES["male"]
     mp3 = asyncio.run(asyncio.wait_for(_edge_audio(text, voices[language]), EDGE_TIMEOUT))
@@ -286,8 +322,28 @@ def speak_edge(text, language):
         raise RuntimeError("no audio came back")
     rate = int(sd.query_devices(kind="output")["default_samplerate"])
     decoded = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
-    sd.play(np.frombuffer(decoded.samples, dtype=np.int16), rate, latency="high")
+    return np.frombuffer(decoded.samples, dtype=np.int16), rate
+
+
+def _play(samples, rate):
+    sd.play(samples, rate, latency="high")
     sd.wait()
+
+
+def _play_chunks(chunks, fetch, progress):
+    """Play chunk i while chunk i+1 is already being made. progress[] records what was really spoken,
+    so a failure half-way only re-speaks the rest."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        nxt = pool.submit(fetch, chunks[0])
+        for i in range(len(chunks)):
+            samples, rate = nxt.result()
+            if i + 1 < len(chunks):
+                nxt = pool.submit(fetch, chunks[i + 1])
+            _play(samples, rate)
+            progress.append(i)
+    finally:
+        pool.shutdown(wait=False)
 
 
 def speak_system(box, tts_cls, text, language):
@@ -312,23 +368,40 @@ def speak_system(box, tts_cls, text, language):
 
 
 def say(box, tts_cls, text):
-    """Order: Piper (offline) -> Edge (online) -> system voice."""
+    """Order: Piper (offline) -> Edge (online) -> system voice. Sentence by sentence."""
     text = clean_for_speech(text)
     if not text:
         return
     language = script_language(text)
-    if box.get("piper"):
+    chunks = split_sentences(text)
+
+    if box.get("piper") and chunks:
+        progress = []
         try:
-            speak_piper(text, language)
+            _play_chunks(chunks, lambda c: piper_fetch(c, language), progress)
             return
         except Exception as error:
             print(f"[tts] piper failed ({type(error).__name__}: {error})")
-    if box["edge"]:
+            chunks = chunks[len(progress):]
+
+    if box["edge"] and chunks and time.time() >= box.get("edge_off_until", 0):
+        progress = []
         try:
-            speak_edge(text, language)
+            _play_chunks(chunks, lambda c: edge_fetch(c, language), progress)
+            box["edge_fails"] = 0
             return
         except Exception as error:
             print(f"[tts] online voice failed ({type(error).__name__}: {error}); using the system voice")
+            chunks = chunks[len(progress):]
+            box["edge_fails"] = box.get("edge_fails", 0) + 1
+            if box["edge_fails"] >= 2:      # do not wait for a timeout on every single reply
+                box["edge_off_until"] = time.time() + 300
+                box["edge_fails"] = 0
+                print("[tts] online voice keeps failing, skipping it for 5 minutes")
+
+    if not chunks:
+        return
+    text = " ".join(chunks)
     if language == "hi" and not box["hindi_system"]:
         print("[tts] cannot speak Hindi on this machine (no Hindi voice and no online voice).")
         return
@@ -336,10 +409,10 @@ def say(box, tts_cls, text):
 
 
 # ---------------------------------------------------------------- vision with retry
-def analyze_retry(frame, mode, tries=3):
+def analyze_retry(frame, mode, question=None, tries=3):
     """analyze() returns the error text instead of raising, so check the returned string."""
     for i in range(tries):
-        text = analyze(frame, mode)
+        text = analyze(frame, mode, question)
         if "503" not in text and "UNAVAILABLE" not in text:
             return text
         print(f"[vision] service busy, retry {i + 1}/{tries}")
@@ -361,12 +434,17 @@ class Session:
 def vision_intent(query):
     t = query.lower()
     words = set(re.findall(r"[a-z']+", t))
-    if ("read" in words or "written" in words or "writing" in words) \
-       or "what does it say" in t or "what does this say" in t:
+    if (words & {"read", "written", "writing", "label"}
+            or any(p in t for p in ("what does it say", "what does this say", "what does that say",
+                                    "what's written", "what is written", "text on", "any text"))):
         return "ocr"
     if any(p in t for p in ("what is this", "what's this", "what is that", "what's that",
-                            "what am i holding", "in my hand", "identify", "what do you see", "look at this")):
+                            "what am i holding", "identify", "what do you see", "look at this")):
         return "identify"
+    if any(p in t for p in ("can you see", "do you see", "look at", "in my hand", "on my screen",
+                            "on my phone", "on this screen", "on the screen", "in front of you",
+                            "behind this")):
+        return "ask"                  # free question about what the camera sees
     return None
 
 
@@ -392,12 +470,18 @@ def voice_worker(s):
         voice_kind = ("offline neural voices" if box["piper"]
                       else "online neural voices" if box["edge"] else "system voices")
         print(f"[ARIA] language: {LANGUAGE} | voice: {ASSISTANT_GENDER}, {voice_kind} | wake word: "
-              + ("say ARIA first, then ask (12 s follow-up window)" if WAKE_WORD_REQUIRED else "off, answers everything"))
+              + (f"say ARIA first, then talk freely ({CONVO_WINDOW} s after each reply, "
+                 f"{FOLLOWUP_WINDOW} s after a question)" if WAKE_WORD_REQUIRED else "off, answers everything"))
         history = []
         active_until = 0.0
+        speech_started = [0.0]
         spoken = deque(maxlen=3)
         with MicListener() as mic:
             s.mic = mic
+
+            def on_speech_start():
+                speech_started[0] = time.time()
+                s.status = HEARING
 
             def speak(text):
                 nonlocal active_until
@@ -412,17 +496,19 @@ def voice_worker(s):
                     if s.detector is not None:
                         s.detector.paused = False
                 print(f"[time] tts {time.time() - t:.2f}s")
-                t = time.time()
                 time.sleep(ECHO_TAIL)
                 mic.drain()
-                print(f"[time] echo-tail+drain {time.time() - t:.2f}s")
+                # a reply that ends with a question keeps the conversation open longer
+                asks = "?" in text[-120:]
+                active_until = time.time() + (FOLLOWUP_WINDOW if asks else CONVO_WINDOW)
+                s.status = LISTENING
 
             speak(greeting(greet_language, ASSISTANT_GENDER))
             s.status = CALIBRATING
             mic.calibrate()
             s.status = LISTENING
             while not s.quit.is_set():
-                path = mic.listen(s.quit, on_speech_start=lambda: setattr(s, "status", HEARING))
+                path = mic.listen(s.quit, on_speech_start=on_speech_start)
                 if not path:
                     s.status = LISTENING
                     continue
@@ -439,7 +525,7 @@ def voice_worker(s):
                     mic.drain()
                     s.status = LISTENING
                     continue
-                query = apply_wake_word(heard, time.time(), active_until)
+                query = apply_wake_word(heard, speech_started[0] or time.time(), active_until)
                 if query is None:
                     print(f"[wake] ignored (not addressed to ARIA): {heard!r}")
                     s.heard = f"(ignored, no ARIA) {heard}"
@@ -456,12 +542,13 @@ def voice_worker(s):
                     break
                 objects = s.detector.stable_labels()
                 mode = vision_intent(query)
+                print(f"[intent] {mode}")
                 if mode:
                     if s.frame is None:
                         speak("I can't see anything yet.")
                         continue
                     s.status = "looking..."
-                    reply = analyze_retry(s.frame.copy(), mode)
+                    reply = analyze_retry(s.frame.copy(), mode, question=query)
                     s.last_vision = {"mode": mode, "text": reply, "ts": time.time()}
                     history += [{"role": "user", "content": query},
                                 {"role": "assistant", "content": reply}]
