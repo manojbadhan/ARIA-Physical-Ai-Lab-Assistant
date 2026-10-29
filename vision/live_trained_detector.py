@@ -1,68 +1,76 @@
-
 from pathlib import Path
+
 import cv2
 from ultralytics import YOLO
 
-# Locate the project and trained model
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Project root directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Your trained 13-class OBB model
 MODEL_PATH = (
     PROJECT_ROOT
+    / "vision"
+    / "Datasets"
     / "runs"
-    / "detect"
-    / "aria_baseline"
+    / "obb"
+    / "aria_combined_13_classes"
     / "weights"
     / "best.pt"
 )
 
-if not MODEL_PATH.exists():
-    raise FileNotFoundError(f"Trained model not found: {MODEL_PATH}")
+CAMERA_INDEX = 0
+CONFIDENCE = 0.25
+IMAGE_SIZE = 640
 
-print("Loading ARIA's trained detector...")
-model = YOLO(str(MODEL_PATH))
-print("Model loaded:", model.names)
 
-# Open your Camo Studio camera
-cap = cv2.VideoCapture(0)
+def main():
+    if not MODEL_PATH.exists():
+        print(f"Model not found: {MODEL_PATH}")
+        print("Check that best.pt exists at the expected location.")
+        return
 
-if not cap.isOpened():
-    cap.release()
-    cap = cv2.VideoCapture(1)
+    print(f"Loading model: {MODEL_PATH}")
+    model = YOLO(str(MODEL_PATH))
 
-if not cap.isOpened():
-    raise RuntimeError(
-        "Camera could not be opened. Check Camo Studio and camera index."
-    )
+    print("Detected model classes:")
+    print(model.names)
 
-print("Live detection started. Press Q to quit.")
+    camera = cv2.VideoCapture(CAMERA_INDEX)
 
-try:
-    while True:
-        success, frame = cap.read()
+    if not camera.isOpened():
+        print("Error: Could not open camera.")
+        return
 
-        if not success:
-            print("Could not read a camera frame.")
-            break
+    print("Camera started. Press Q to quit.")
 
-        # Run object detection on the live frame using your GPU
-        results = model.predict(
-               source=frame,
-               imgsz=640,
-               conf=0.25,
-               device=0,
-               verbose=False,
-           )
+    try:
+        while True:
+            success, frame = camera.read()
 
-        
-        # Draw YOLO detections first
-        annotated_frame = results[0].plot()
+            if not success:
+                print("Could not read a frame from the camera.")
+                break
 
-        cv2.imshow("ARIA - Live Object Detection", annotated_frame)
+            results = model.predict(
+                source=frame,
+                imgsz=IMAGE_SIZE,
+                conf=CONFIDENCE,
+                verbose=False,
+            )
 
-        # Press Q to close the live feed
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+            # Ultralytics plots oriented bounding boxes (OBB)
+            annotated_frame = results[0].plot()
 
-finally:
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Live detection stopped.")
+            cv2.imshow("ARIA - 13 Class Object Detection", annotated_frame)
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

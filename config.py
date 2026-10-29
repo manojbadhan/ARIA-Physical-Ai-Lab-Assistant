@@ -14,18 +14,21 @@ STORE_DIR = "rag/store/"
 CHUNKS_PATH = STORE_DIR + "chunks.pkl"
 EMBEDDINGS_PATH = STORE_DIR + "embeddings.npy"
 LANGUAGE = "auto"
+ACTIVE_WINDOW = 5.0
+HINDI_MIN_LETTERS = 8      
+HINDI_MIN_DEVA_RATIO = 0.6
 GREETING_LANGUAGE = "en"
 ASSISTANT_GENDER = "male"
 STT_MODELS = {"auto": "whisper-large-v3", "hi": "whisper-large-v3"}
 STT_PROMPTS = {"auto": "Hello ARIA. हेलो आरिया।", "hi": "हेलो आरिया।", "en": "Hello ARIA."}
 TTS_ENGINE = "edge"
 EDGE_VOICES = {
-    "male": {"en": "en-IN-PrabhatNeural", "hi": "hi-IN-MadhurNeural"},
-    "female": {"en": "en-IN-NeerjaNeural", "hi": "hi-IN-SwaraNeural"},
+    "male": {"en": "en-US-GuyNeural", "hi": "hi-IN-MadhurNeural"},
+    "female": {"en": "en-US-JennyNeural", "hi": "hi-IN-SwaraNeural"},
 }
 EDGE_RATE = "+0%"
 EDGE_VOLUME = "+0%"
-EDGE_TIMEOUT = 8
+EDGE_TIMEOUT = 15
 VOICE_KEYWORDS = {"en": ("english", "en-", "/en"), "hi": ("hindi", "hi-in", "/hi")}
 GENDER_VOICE_WORDS = {
     "male": ("david", "mark", "george", "ravi", "hemant", "madhur", "prabhat", "guy", "male"),
@@ -40,26 +43,26 @@ WAKE_WORD_POSITION = 4
 ACTIVE_WINDOW = 12.0
 EXIT_WORDS = ("exit", "quit", "stop", "goodbye", "अलविदा", "बाय", "बाय बाय", "बंद करो", "रुको", "बस")
 HISTORY_MESSAGES = 20
-ECHO_TAIL = 0.8
-ECHO_OVERLAP = 0.7
+ECHO_TAIL = 1.2
+ECHO_OVERLAP = 0.85
 FASTEST_SPEECH_CPS = 60
-MAX_NO_SPEECH_PROB = 0.6
+MAX_NO_SPEECH_PROB = 0.5
 MIN_AVG_LOGPROB = -1.2
 MAX_COMPRESSION_RATIO = 2.4
 MAX_FOREIGN_RATIO = 0.2
 MIC_DEVICE = None
 MIC_CHANNELS = 1
-MIC_THRESHOLD = None
+MIC_THRESHOLD = 500
 CALIBRATION_SECONDS = 2.0
-THRESHOLD_FACTOR_VAD = 2.0
-THRESHOLD_FACTOR_NO_VAD = 3.5
+THRESHOLD_FACTOR_VAD = 1.8
+THRESHOLD_FACTOR_NO_VAD = 2.5
 MIN_THRESHOLD = 150
-VAD_AGGRESSIVENESS = 2
+VAD_AGGRESSIVENESS = 3
 START_WINDOW = 6
 START_VOTES = 5
 END_SILENCE_BLOCKS = 25
-MIN_VOICED_BLOCKS = 8
-MIN_SPEECH_RATIO = 0.3
+MIN_VOICED_BLOCKS = 6
+MIN_SPEECH_RATIO = 0.2
 MAX_RECORD_SECONDS = 30
 IDLE_REPORT_SECONDS = 15
 CAMERA_INDEX = 0

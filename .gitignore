@@ -23,4 +23,33 @@ notes/
 .DS_Store
 .vscode/
 .idea/
+<<<<<<< HEAD
 *.log
+# Large AI models
+*.onnx
+*.bin
+
+# Temporary files
+last_vision.jpg
+=======
+*.log# Dataset images and labels
+vision/Datasets/aria_combined_all_obb_dataset/train/
+vision/Datasets/aria_combined_all_obb_dataset/valid/
+vision/Datasets/aria_combined_all_obb_dataset/test/
+vision/Datasets/aria_combined_obb_dataset/
+
+# Training outputs: keep only selected evaluation results and best.pt
+vision/Datasets/runs/obb/aria_combined_13_classes/weights/last.pt
+vision/Datasets/runs/obb/aria_combined_13_classes/args.yaml
+vision/Datasets/runs/obb/aria_combined_13_classes/labels.jpg
+vision/Datasets/runs/obb/aria_combined_13_classes/train_batch*.jpg
+vision/Datasets/runs/obb/aria_combined_13_classes/val_batch*.jpg
+
+# Other generated runs and large model downloads
+runs/
+weights/
+
+# Python caches
+__pycache__/
+*.py[cod]
+>>>>>>> visual-assistant
