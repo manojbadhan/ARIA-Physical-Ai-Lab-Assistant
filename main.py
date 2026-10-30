@@ -1,5 +1,6 @@
 import os
 import platform
+import sys
 
 if platform.system() != "Windows":
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")   # must be before import cv2
@@ -27,7 +28,7 @@ class ARIA:
         self.cap = None
         self.latest_jpeg = None
         self.latest_frame = None
-        self.latest_display = None            # was missing: the main loop reads this
+        self.latest_display = None            # the main loop reads this
         self.lock = threading.Lock()
         self.vision_busy = threading.Event()
         self.s.last_vision = {"mode": None, "text": "", "ts": 0}
@@ -97,7 +98,7 @@ class ARIA:
             fails = 0
 
             self.latest_frame = frame
-            self.s.frame = frame          # was missing: the voice thread reads this for "read this" / "what is this"
+            self.s.frame = frame          # the voice thread reads this for "read this" / "what is this"
 
             now = time.time()
             if now - last_fed >= 1.0 / DETECT_FPS:
@@ -144,8 +145,8 @@ class ARIA:
             self.cap.release()
 
 
-if __name__ == "__main__":
-    aria = ARIA()
+def run_cv_window(aria):
+    """Old mode: OpenCV window. Run with:  python main.py --cv"""
     aria.start()
     try:
         while not aria.s.quit.is_set():
@@ -161,3 +162,25 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
         time.sleep(0.5)
         os._exit(0)
+
+
+def run_ui(aria):
+    """New mode: ARIA screen (ui.py). Run with:  python main.py [--windowed]"""
+    aria.start()
+    import ui                              # imported late so --cv mode never loads PySide6
+    try:
+        ui.show(aria.s, get_frame=lambda: aria.latest_display)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        aria.stop()
+        time.sleep(0.5)
+        os._exit(0)
+
+
+if __name__ == "__main__":
+    aria = ARIA()
+    if "--cv" in sys.argv:
+        run_cv_window(aria)
+    else:
+        run_ui(aria)

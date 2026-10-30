@@ -429,7 +429,9 @@ class Session:
         self.mic = None
         self.frame = None
         self.last_vision = {"mode": None, "text": "", "ts": 0}
-
+        self.reply = ""
+        self.reply_n = 0
+        self.heard_n = 0
 
 def vision_intent(query):
     t = query.lower()
@@ -486,6 +488,8 @@ def voice_worker(s):
             def speak(text):
                 nonlocal active_until
                 s.status = "speaking..."
+                s.reply = text
+                s.reply_n += 1
                 spoken.append(text)
                 if PAUSE_VISION_WHILE_SPEAKING and s.detector is not None:
                     s.detector.paused = True
@@ -535,6 +539,7 @@ def voice_worker(s):
                     speak(WAKE_REPLIES[language])
                     continue
                 s.heard = query
+                s.heard_n += 1
                 print(f"\nYou ({language}): {query}")
                 if query.lower().strip(" .!?।") in EXIT_WORDS:
                     speak("Goodbye." if language == "en" else "अलविदा!")
