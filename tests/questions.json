@@ -1,0 +1,47 @@
+[
+  {"q": "How do I load filament into the Ender 3 V3?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["filament", "nozzle"]},
+  {"q": "How do I clean the Ender 3 nozzle?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["nozzle", "brass"]},
+  {"q": "How often should I wipe the Ender 3 build plate?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["isopropyl", "plate"]},
+  {"q": "What should I do after a print finishes on the Ender 3?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["bed", "cool"]},
+  {"q": "How do I remove a print from the flexible plate?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["plate", "bend"]},
+  {"q": "Which firmware should I use to update the Ender 3 V3?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["firmware", "Creality"]},
+  {"q": "How should filament be stored for the Ender 3?", "file": "LAB-OBJ-002_Creality_Ender3_V3_FDM_Printer_RAG.md", "keywords": ["dry", "desiccant"]},
+
+  {"q": "What is a wash and cure machine?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["wash", "cure"]},
+  {"q": "What do the buttons on the wash and cure machine mean?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["mode", "speed", "time"]},
+  {"q": "How do I start a wash cycle?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["wash", "start"]},
+  {"q": "How do I pause the wash and cure machine?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["pause"]},
+  {"q": "What is the difference between wash mode and cure mode?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["wash", "cure", "UV"]},
+  {"q": "What safety precautions apply when using the wash and cure machine?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["gloves", "UV"]},
+  {"q": "How do I set the time and speed on the wash and cure machine?", "file": "LAB-OBJ-001_Creality_Wash_Cure_RAG.md", "keywords": ["time", "speed"]},
+
+  {"q": "What is the HALOT-MAGE S 14K?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["resin", "14K"]},
+  {"q": "What is the orange cover on the HALOT-MAGE for?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["UV", "lid"]},
+  {"q": "What do the USB ports on the HALOT-MAGE do?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["USB"]},
+  {"q": "How do I move the Z axis on the HALOT-MAGE?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["Z", "screen"]},
+  {"q": "What should I do with leftover resin scraps?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["resin", "waste"]},
+  {"q": "What safety gear do I need when handling resin?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["gloves", "resin"]},
+  {"q": "Why must the HALOT-MAGE lid stay closed during printing?", "file": "LAB-OBJ-003_Creality_HALOT-MAGE_S_14K_Resin_Printer_RAG.md", "keywords": ["UV", "fumes"]},
+
+  {"q": "What is the Bambu Lab X2D?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["Bambu"]},
+  {"q": "What is the AMS 2 Pro used for?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["AMS", "filament"]},
+  {"q": "How do I load filament into the Bambu X2D?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["filament"]},
+  {"q": "How do I start a print on the Bambu X2D?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["print"]},
+  {"q": "What are the safety warnings for the Bambu X2D?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["hot"]},
+  {"q": "How do I maintain the Bambu X2D?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["clean"]},
+  {"q": "What materials can the Bambu X2D print?", "file": "LAB-OBJ-004_BambuLab_X2D_AMS2Pro_FDM_Printer_RAG.md", "keywords": ["PLA"]},
+
+  {"q": "What is the Make3D Pratham 3.0?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["industrial", "FDM"]},
+  {"q": "What is the Pratham 3.0 used for?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["prototypes", "engineering"]},
+  {"q": "Which materials can the Pratham 3.0 print?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["ABS", "PETG"]},
+  {"q": "Why does the Pratham 3.0 have an enclosure?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["enclosure", "heat"]},
+  {"q": "Can the Pratham 3.0 run long jobs?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["long", "continuous"]},
+  {"q": "How do I maintain the Pratham 3.0?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["clean", "lubricate"]},
+  {"q": "What safety rules apply to the Pratham 3.0?", "file": "LAB-OBJ-005_Make3D_Pratham_3.0_Industrial_FDM_Printer_RAG.md", "keywords": ["flammable"]},
+
+  {"q": "What is the capital of France?", "file": null},
+  {"q": "Who won the cricket world cup?", "file": null},
+  {"q": "How do I bake a chocolate cake?", "file": null},
+  {"q": "What is the weather like today?", "file": null},
+  {"q": "Write a poem about the ocean.", "file": null}
+]

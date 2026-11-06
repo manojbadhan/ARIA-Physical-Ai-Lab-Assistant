@@ -9,16 +9,22 @@ import re
 import numpy as np
 
 from config import SIMILARITY_THRESHOLD, TOP_K
-from rag import ingest
+from rag import db, ingest
 
 NOT_IN_NOTES = "This is not in the notes."
 CANDIDATES = 20          # how many chunks each search method proposes before fusing
 RRF_K = 60               # standard reciprocal-rank-fusion constant
 MIN_BM25 = 3.0           # BM25 score that counts as a real keyword match
 
+STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "it", "its", "this", "that",
+    "what", "which", "who", "how", "why", "when", "where", "do", "does", "did",
+    "of", "to", "in", "on", "for", "with", "and", "or", "can", "i", "you", "me", "my",
+}
+
 
 def tokenize(text):
-    return re.findall(r"\w+", text.lower())
+    return [w for w in re.findall(r"\w+", text.lower()) if w not in STOPWORDS]
 
 
 class Retriever:
@@ -28,32 +34,42 @@ class Retriever:
     def reload(self):
         """Call after ingest so new files are searchable without restarting the server."""
         from rank_bm25 import BM25Okapi
-        self.chunks, self.vectors = ingest.load_store()
+        self.chunks = ingest.load_store()
+        self.pos = {c["id"]: i for i, c in enumerate(self.chunks)}
         self.bm25 = BM25Okapi([tokenize(c["text"]) for c in self.chunks]) if self.chunks else None
 
     def search(self, query, objects=None, k=TOP_K):
-        """Return top-k chunks as dicts with a 0-1 'score' (cosine similarity of the best match)."""
+        """Return top-k chunks as dicts with a 0-1 'score' (cosine similarity)."""
         if not self.chunks:
             return []
         # Camera labels make "how do I use this?" searchable: "this" -> "multimeter"
         text = f"{query} {' '.join(objects)}" if objects else query
 
-        sims = self.vectors @ ingest.embed([text])[0]               # cosine (vectors normalised)
-        kw = np.asarray(self.bm25.get_scores(tokenize(text)))
+        qvec = ingest.embed([text])[0]
+        vec_hits = db.query(qvec, CANDIDATES)                  # Chroma vector search
+        sims = dict(vec_hits)
+        top_v = [self.pos[i] for i, _ in vec_hits if i in self.pos]
 
-        top_v = np.argsort(-sims)[:CANDIDATES]
+        kw = np.asarray(self.bm25.get_scores(tokenize(text)))
         top_k = np.argsort(-kw)[:CANDIDATES]
+
         fused = {}
-        for ranking in (top_v, top_k):                               # reciprocal rank fusion
+        for ranking in (top_v, top_k):                         # reciprocal rank fusion
             for rank, i in enumerate(ranking):
                 fused[i] = fused.get(i, 0.0) + 1.0 / (RRF_K + rank + 1)
         best = sorted(fused, key=fused.get, reverse=True)[:k]
 
+        # chunks found only by BM25 have no vector score yet, so fetch it
+        missing = [self.chunks[i]["id"] for i in best if self.chunks[i]["id"] not in sims]
+        if missing:
+            sims.update(db.similarities(qvec, missing))
+
         results = []
         for i in best:
+            s = sims[self.chunks[i]["id"]]
             # keep a chunk if EITHER method is confident about it
-            if sims[i] >= SIMILARITY_THRESHOLD or kw[i] >= MIN_BM25:
-                results.append({**self.chunks[i], "score": round(float(sims[i]), 3),
+            if s >= SIMILARITY_THRESHOLD or kw[i] >= MIN_BM25:
+                results.append({**self.chunks[i], "score": round(float(s), 3),
                                 "keyword": round(float(kw[i]), 2)})
         return results
 
@@ -84,6 +100,14 @@ def sources_of(hits):
     return out
 
 
+def for_speech(text):
+    """Clean an answer so text-to-speech reads it naturally."""
+    text = re.sub(r"\[[^\]]*\.(md|pdf|txt)[^\]]*\]", "", text)   # [file.md, section 3]
+    text = re.sub(r"[*_`#>]+", "", text)                           # markdown symbols
+    text = re.sub(r"^\s*[-•]\s+", "", text, flags=re.M)            # bullet markers
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def ask(query, objects=None, history=None, llm=None):
     """Full RAG answer. Does NOT call the LLM when nothing relevant is found."""
     hits = get_retriever().search(query, objects)
@@ -96,7 +120,12 @@ def ask(query, objects=None, history=None, llm=None):
     answer = llm.generate_response(user_message=query, system_prompt=RAG_SYSTEM_PROMPT,
                                    conversation_history=history,
                                    retrieved_context=build_context(hits))
-    return {"answer": answer, "sources": sources_of(hits), "found": True}
+    return {"answer": answer, "speech": for_speech(answer),
+            "sources": sources_of(hits), "found": True}
+
+
+def warm_up():
+    get_retriever().search("warm up")      # loads the embedding model and the database
 
 
 if __name__ == "__main__":                      # python -m rag.retrieve "your question"
