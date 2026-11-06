@@ -90,7 +90,7 @@ def chunk_file(path):
 
 # ---------- 3. load ----------
 def load_store():
-    return db.load_all()
+    return db.load_chunks()
 
 
 # ---------- 4. public API ----------
@@ -119,7 +119,6 @@ def ingest_all(force=False):
         print(f"[ingest] ingested  {name}: {len(chunks)} chunks")
 
     total = db.count(con)
-    con.close()
     print(f"[ingest] {len(files)} files -> {total} chunks")
     return total
 
@@ -132,7 +131,6 @@ def ingest_file(path):
     con = db.connect()
     db.replace_file(con, path.name, db.file_hash(path), new, vectors)
     total = db.count(con)
-    con.close()
     print(f"[ingest] {path.name}: {len(new)} chunks added, {total} total")
     return len(new)
 

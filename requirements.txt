@@ -12,5 +12,6 @@ pyttsx3
 sounddevice
 PySide6
 rank-bm25
+chromadb==1.5.9
 
 
