@@ -11,5 +11,6 @@ SpeechRecognition
 pyttsx3
 sounddevice
 PySide6
+rank-bm25
 
 

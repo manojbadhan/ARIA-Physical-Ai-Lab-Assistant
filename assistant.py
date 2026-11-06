@@ -24,7 +24,8 @@ from config import (
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
     WAKE_WORD_REQUIRED, WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
 )
-from llm.prompts import SYSTEM_PROMPT
+from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from rag.retrieve import get_retriever, build_context
 
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"

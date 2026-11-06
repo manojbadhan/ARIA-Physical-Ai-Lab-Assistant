@@ -13,11 +13,8 @@ env/
  
 # RAG generated data (regenerate via rag/ingest.py, don't commit)
 rag/store/
-*.pkl
-*.npy
- 
-# Notes (optional — remove this line if you want notes tracked in git)
-notes/
+*.db
+
  
 # OS / editor junk
 .DS_Store

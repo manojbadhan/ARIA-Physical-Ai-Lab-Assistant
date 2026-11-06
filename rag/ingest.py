@@ -1,11 +1,10 @@
-import pickle
 import re
 from pathlib import Path
 
 import numpy as np
 
-from config import (CHUNK_OVERLAP, CHUNK_SIZE, CHUNKS_PATH, EMBEDDING_MODEL_NAME,
-                    EMBEDDINGS_PATH, NOTES_DIR, STORE_DIR)
+from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL_NAME, NOTES_DIR
+from rag import db
 
 BASE = Path(__file__).resolve().parent.parent
 SUPPORTED = {".pdf", ".md", ".txt"}
@@ -89,60 +88,60 @@ def chunk_file(path):
     return chunks
 
 
-# ---------- 3. save / load ----------
-def save_store(chunks, vectors):
-    (BASE / STORE_DIR).mkdir(parents=True, exist_ok=True)
-    with open(BASE / CHUNKS_PATH, "wb") as f:
-        pickle.dump(chunks, f)
-    np.save(BASE / EMBEDDINGS_PATH, vectors)
-
-
+# ---------- 3. load ----------
 def load_store():
-    cp, ep = BASE / CHUNKS_PATH, BASE / EMBEDDINGS_PATH
-    if not (cp.exists() and ep.exists()):
-        return [], np.zeros((0, 384), dtype="float32")
-    with open(cp, "rb") as f:
-        return pickle.load(f), np.load(ep)
+    return db.load_all()
 
 
 # ---------- 4. public API ----------
-def ingest_all():
-    """Rebuild the whole index from NOTES_DIR."""
+def ingest_all(force=False):
+    """Sync NOTES_DIR into the database. Only new or changed files are re-embedded."""
     files = sorted(p for p in (BASE / NOTES_DIR).rglob("*") if p.suffix.lower() in SUPPORTED)
-    chunks = [c for p in files for c in chunk_file(p)]
-    if not chunks:
+    if not files:
         raise SystemExit(f"No notes found in {BASE / NOTES_DIR}. Put .pdf/.md files there first.")
-    save_store(chunks, embed([c["text"] for c in chunks]))
-    print(f"[ingest] {len(files)} files -> {len(chunks)} chunks")
-    return len(chunks)
+    by_name = {p.name: p for p in files}
+
+    con = db.connect()
+    known = db.known_hashes(con)
+
+    for name in set(known) - set(by_name):          # file deleted from notes/
+        db.remove_file(con, name)
+        print(f"[ingest] removed   {name}")
+
+    for name, path in by_name.items():
+        h = db.file_hash(path)
+        if not force and known.get(name) == h:
+            print(f"[ingest] unchanged {name}")
+            continue
+        chunks = chunk_file(path)
+        vectors = embed([c["text"] for c in chunks]) if chunks else []
+        db.replace_file(con, name, h, chunks, vectors)
+        print(f"[ingest] ingested  {name}: {len(chunks)} chunks")
+
+    total = db.count(con)
+    con.close()
+    print(f"[ingest] {len(files)} files -> {total} chunks")
+    return total
 
 
 def ingest_file(path):
     """Add (or replace) ONE file. Used by the /ingest endpoint after an upload."""
     path = Path(path)
     new = chunk_file(path)
-    chunks, vectors = load_store()
-    keep = [i for i, c in enumerate(chunks) if c["file"] != path.name]   # replace old version
-    chunks = [chunks[i] for i in keep]
-    vectors = vectors[keep] if keep else np.zeros((0, 384), dtype="float32")
-    if new:
-        chunks += new
-        vectors = np.vstack([vectors, embed([c["text"] for c in new])])
-    save_store(chunks, vectors)
-    print(f"[ingest] {path.name}: {len(new)} chunks added, {len(chunks)} total")
+    vectors = embed([c["text"] for c in new]) if new else []
+    con = db.connect()
+    db.replace_file(con, path.name, db.file_hash(path), new, vectors)
+    total = db.count(con)
+    con.close()
+    print(f"[ingest] {path.name}: {len(new)} chunks added, {total} total")
     return len(new)
 
 
 def list_notes():
     """For GET /notes: file name + number of pages/sections + chunk count."""
-    chunks, _ = load_store()
-    info = {}
-    for c in chunks:
-        d = info.setdefault(c["file"], {"file": c["file"], "pages": 0, "chunks": 0})
-        d["pages"] = max(d["pages"], c["page"])
-        d["chunks"] += 1
-    return list(info.values())
+    return db.notes_summary()
 
 
-if __name__ == "__main__":
-    ingest_all()
+if __name__ == "__main__":                      # python -m rag.ingest [--force]
+    import sys
+    ingest_all(force="--force" in sys.argv)

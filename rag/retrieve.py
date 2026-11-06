@@ -16,9 +16,15 @@ CANDIDATES = 20          # how many chunks each search method proposes before fu
 RRF_K = 60               # standard reciprocal-rank-fusion constant
 MIN_BM25 = 3.0           # BM25 score that counts as a real keyword match
 
+STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "it", "its", "this", "that",
+    "what", "which", "who", "how", "why", "when", "where", "do", "does", "did",
+    "of", "to", "in", "on", "for", "with", "and", "or", "can", "i", "you", "me", "my",
+}
+
 
 def tokenize(text):
-    return re.findall(r"\w+", text.lower())
+    return [w for w in re.findall(r"\w+", text.lower()) if w not in STOPWORDS]
 
 
 class Retriever:
@@ -96,11 +102,14 @@ def ask(query, objects=None, history=None, llm=None):
     answer = llm.generate_response(user_message=query, system_prompt=RAG_SYSTEM_PROMPT,
                                    conversation_history=history,
                                    retrieved_context=build_context(hits))
-    return {"answer": answer, "sources": sources_of(hits), "found": True}
-
+    return {"answer": answer, "speech": for_speech(answer),
+            "sources": sources_of(hits), "found": True}
 
 if __name__ == "__main__":                      # python -m rag.retrieve "your question"
     import json
     import sys
     q = " ".join(sys.argv[1:]) or "What is a wash and cure machine?"
     print(json.dumps(ask(q), indent=2, ensure_ascii=False))
+
+def warm_up():
+    get_retriever().search("warm up")      # loads the embedding model and the database
