@@ -48,3 +48,5 @@ weights/
 
 rag/store/chroma/
 results.txt
+
+backup_old/
