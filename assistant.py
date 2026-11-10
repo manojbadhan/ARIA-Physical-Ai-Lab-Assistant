@@ -25,7 +25,7 @@ from config import (
     WAKE_WORD_REQUIRED, WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
 )
 from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
-from rag.retrieve import get_retriever, build_context
+from rag.retrieve import get_retriever, build_context, warm_up
 
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
@@ -450,6 +450,40 @@ def vision_intent(query):
         return "ask"                  # free question about what the camera sees
     return None
 
+# ---------------------------------------------------------------- notes (RAG) or general answer
+OUTSIDE_NOTES_RULE = (
+    "The lab notes do NOT cover this question. If it is about how to operate, maintain or stay safe "
+    "with specific lab equipment, say briefly that it is not in the lab notes and suggest asking the "
+    "lab staff. Otherwise answer briefly from general knowledge, starting with a short cue that this "
+    "is not from the lab notes. Keep the answer short enough to be spoken."
+)
+
+
+def answer_query(llm, query, objects, history, language):
+    """Search the notes first. Found -> grounded answer. Not found -> general answer."""
+    rules = system_rules(language, ASSISTANT_GENDER)
+    hits = []
+    try:
+        hits = get_retriever().search(query, objects)
+    except Exception as error:                      # never let RAG break the voice loop
+        print(f"[rag ERROR] {type(error).__name__}: {error}")
+    if hits:
+        print(f"[rag] {len(hits)} chunks, best: {hits[0]['file']} (score {hits[0]['score']})")
+        return llm.generate_response(
+            user_message=build_message(query, objects),
+            system_prompt=RAG_SYSTEM_PROMPT + "\n\n" + rules,
+            conversation_history=history,
+            max_history_turns=HISTORY_MESSAGES,
+            retrieved_context=build_context(hits),
+        )
+    print("[rag] nothing relevant in the notes")
+    return llm.generate_response(
+        user_message=build_message(query, objects),
+        system_prompt=SYSTEM_PROMPT + "\n\n" + rules + "\n\n" + OUTSIDE_NOTES_RULE,
+        conversation_history=history,
+        max_history_turns=HISTORY_MESSAGES,
+    )
+
 
 # ---------------------------------------------------------------- main voice loop
 def voice_worker(s):
@@ -563,14 +597,15 @@ def voice_worker(s):
                     continue
                 print(f"[camera sees: {', '.join(objects) or 'nothing recognizable'}]")
                 s.status = "thinking..."
-                reply = llm.generate_response(
-                    user_message=build_message(query, objects),
-                    system_prompt=SYSTEM_PROMPT + "\n\n" + system_rules(language, ASSISTANT_GENDER),
-                    conversation_history=history,
-                    max_history_turns=HISTORY_MESSAGES,
-                )
+                reply = answer_query(llm, query, objects, history, language)
                 history += [{"role": "user", "content": query},
                             {"role": "assistant", "content": reply}]
+                
+                try:
+                    warm_up()                       # load the embedding model before the first question
+                except Exception as error:
+                    print(f"[rag] warm-up failed: {error}")
+                    
                 print(f"ARIA: {reply}")
                 speak(reply)
     except Exception:
