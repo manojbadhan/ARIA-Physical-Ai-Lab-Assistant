@@ -18,24 +18,32 @@ from audio.listener import MicListener
 from vision.gemini_vision import analyze
 from chat.prompts2 import WAKE_REPLIES, build_message, greeting, system_rules
 from config import (
-    ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
+    ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
     EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, GREETING_LANGUAGE, HISTORY_MESSAGES, LANGUAGE,
     MAX_COMPRESSION_RATIO, MAX_FOREIGN_RATIO, MAX_NO_SPEECH_PROB, MIN_AVG_LOGPROB, PAUSE_VISION_WHILE_SPEAKING,
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
-    WAKE_WORD_REQUIRED, WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
+    WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
 )
 from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
 from rag.retrieve import get_retriever, build_context, warm_up
 
+# ---------------------------------------------------------------- wake word (strict)
+# ARIA only reacts to a sentence that contains the wake word ("ARIA" / "Hey ARIA").
+# These constants replace WAKE_WORD_REQUIRED and ACTIVE_WINDOW from config.py (those are no longer read).
+WAKE_REQUIRED = True
+CONVO_WINDOW = 0          # seconds a follow-up is accepted WITHOUT the wake word after a normal answer
+FOLLOWUP_WINDOW = 0       # same, when ARIA's reply ends with a question
+ARMED_SECONDS = 8         # after you say only "ARIA" and she answers, you have this long to ask your question
+
+# ---------------------------------------------------------------- protection against hearing herself
+ECHO_GUARD = 1.0          # minimum pause after she speaks before the mic is read again (hardware: speaker next to mic)
+SELF_HEAR_SECONDS = 4.0   # a short fragment right after she spoke is treated as her own voice coming back
+MAX_REPLIES_PER_MINUTE = 6  # if she would answer more often than this, something is feeding her own voice back
+
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
-LISTENING = "LISTENING - say ARIA, then ask" if WAKE_WORD_REQUIRED else "LISTENING - just ask"
+LISTENING = "LISTENING - say ARIA, then ask"
 HEARING = "hearing you..."
-
-# ---------------------------------------------------------------- conversation mode
-# After ARIA answers, the user can keep talking WITHOUT saying "ARIA" for this long.
-CONVO_WINDOW = max(ACTIVE_WINDOW, 45)      # seconds, after a normal answer
-FOLLOWUP_WINDOW = 90                       # seconds, when ARIA's reply ends with a question
 
 # ---------------------------------------------------------------- Piper (offline neural voice)
 _PIPER = {}
@@ -199,9 +207,16 @@ def _tokens(text):
     return re.sub(r"[^\w\u0900-\u097F]+", " ", text.lower()).split()
 
 
-def looks_like_echo(heard, spoken_texts):
+def looks_like_echo(heard, spoken_texts, since_spoke=None):
+    """True if `heard` is ARIA's own voice coming back through the microphone.
+    since_spoke = seconds between the end of her last reply and the start of this sound."""
     words = _tokens(heard)
+    if not words:
+        return False
     if len(words) < 3:
+        # a short fragment (often just "ARIA") right after she spoke is almost always her own voice
+        if since_spoke is not None and since_spoke < SELF_HEAR_SECONDS:
+            return any(all(w in set(_tokens(t)) for w in words) for t in spoken_texts)
         return False
     for text in spoken_texts:
         said = set(_tokens(text))
@@ -211,6 +226,9 @@ def looks_like_echo(heard, spoken_texts):
 
 
 # ---------------------------------------------------------------- wake word
+GREETING_WORDS = {"hey", "hi", "hello", "ok", "okay"}
+
+
 def _clean_word(word):
     return word.strip(" ,.!?।-'\"").lower()
 
@@ -232,16 +250,19 @@ def _is_wake_exact(word):
 
 
 def apply_wake_word(query, started_at, active_until):
-    """started_at = when the user STARTED speaking (not when transcription finished).
-    Inside the conversation window no wake word is needed."""
+    """Returns the question without the wake word, "" if only the wake word was said,
+    or None if ARIA was not addressed (the sentence is ignored).
+    started_at = when the user STARTED speaking. A sentence that starts before active_until
+    (the short window after the wake word) does not need the wake word again."""
     words = query.split()
     lead = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
     anywhere = lead or any(_is_wake_exact(w) for w in words)
-    if not anywhere and WAKE_WORD_REQUIRED and started_at > active_until:
+    if not anywhere and WAKE_REQUIRED and started_at > active_until:
         return None
     if not lead:
         return query                      # keep "ARIA" if it was said at the end, it is part of the question
-    kept = [w for i, w in enumerate(words) if not (i < WAKE_WORD_POSITION and _is_wake(w))]
+    kept = [w for i, w in enumerate(words)
+            if not (i < WAKE_WORD_POSITION and (_is_wake(w) or _clean_word(w) in GREETING_WORDS))]
     return " ".join(kept).strip(" ,.!?।-")
 
 
@@ -434,6 +455,7 @@ class Session:
         self.reply_n = 0
         self.heard_n = 0
 
+
 def vision_intent(query):
     t = query.lower()
     words = set(re.findall(r"[a-z']+", t))
@@ -449,6 +471,7 @@ def vision_intent(query):
                             "behind this")):
         return "ask"                  # free question about what the camera sees
     return None
+
 
 # ---------------------------------------------------------------- notes (RAG) or general answer
 OUTSIDE_NOTES_RULE = (
@@ -485,6 +508,14 @@ def answer_query(llm, query, objects, history, language):
     )
 
 
+def _warm_up_rag():
+    """Load the embedding model once, in the background, so the first question is not slow."""
+    try:
+        warm_up()
+    except Exception as error:
+        print(f"[rag] warm-up failed: {error}")
+
+
 # ---------------------------------------------------------------- main voice loop
 def voice_worker(s):
     global LANGUAGE
@@ -507,11 +538,14 @@ def voice_worker(s):
         voice_kind = ("offline neural voices" if box["piper"]
                       else "online neural voices" if box["edge"] else "system voices")
         print(f"[ARIA] language: {LANGUAGE} | voice: {ASSISTANT_GENDER}, {voice_kind} | wake word: "
-              + (f"say ARIA first, then talk freely ({CONVO_WINDOW} s after each reply, "
-                 f"{FOLLOWUP_WINDOW} s after a question)" if WAKE_WORD_REQUIRED else "off, answers everything"))
+              + (f"required, say ARIA first (follow-up without it: {CONVO_WINDOW} s, "
+                 f"after a question: {FOLLOWUP_WINDOW} s)" if WAKE_REQUIRED else "off, answers everything"))
+        threading.Thread(target=_warm_up_rag, daemon=True).start()
         history = []
         active_until = 0.0
         speech_started = [0.0]
+        last_spoke_end = [0.0]
+        reply_times = deque(maxlen=20)
         spoken = deque(maxlen=3)
         with MicListener() as mic:
             s.mic = mic
@@ -535,9 +569,10 @@ def voice_worker(s):
                     if s.detector is not None:
                         s.detector.paused = False
                 print(f"[time] tts {time.time() - t:.2f}s")
-                time.sleep(ECHO_TAIL)
+                time.sleep(max(ECHO_TAIL, ECHO_GUARD))     # let the room and the speaker go quiet
                 mic.drain()
-                # a reply that ends with a question keeps the conversation open longer
+                last_spoke_end[0] = time.time()
+                # a reply that ends with a question may keep a short follow-up window open (0 = strict)
                 asks = "?" in text[-120:]
                 active_until = time.time() + (FOLLOWUP_WINDOW if asks else CONVO_WINDOW)
                 s.status = LISTENING
@@ -558,7 +593,8 @@ def voice_worker(s):
                     mic.drain()
                     s.status = LISTENING
                     continue
-                if looks_like_echo(heard, spoken):
+                since = max(0.0, (speech_started[0] or time.time()) - last_spoke_end[0])
+                if looks_like_echo(heard, spoken, since):
                     print(f"[echo] ignored (that was ARIA's own voice): {heard!r}")
                     s.heard = "(ignored: her own echo)"
                     mic.drain()
@@ -572,6 +608,7 @@ def voice_worker(s):
                     continue
                 if query == "":
                     speak(WAKE_REPLIES[language])
+                    active_until = time.time() + ARMED_SECONDS    # now she is listening for the question
                     continue
                 s.heard = query
                 s.heard_n += 1
@@ -580,6 +617,22 @@ def voice_worker(s):
                     speak("Goodbye." if language == "en" else "अलविदा!")
                     s.quit.set()
                     break
+
+                # runaway guard: she should never answer many times a minute on her own
+                now = time.time()
+                while reply_times and now - reply_times[0] > 60:
+                    reply_times.popleft()
+                if len(reply_times) >= MAX_REPLIES_PER_MINUTE:
+                    print("[guard] too many replies in one minute - pausing 15 s. "
+                          "Is ARIA hearing herself? Check speaker/mic placement and volume.")
+                    mic.drain()
+                    time.sleep(15)
+                    mic.drain()
+                    reply_times.clear()
+                    s.status = LISTENING
+                    continue
+                reply_times.append(now)
+
                 objects = s.detector.stable_labels()
                 mode = vision_intent(query)
                 print(f"[intent] {mode}")
@@ -600,12 +653,6 @@ def voice_worker(s):
                 reply = answer_query(llm, query, objects, history, language)
                 history += [{"role": "user", "content": query},
                             {"role": "assistant", "content": reply}]
-                
-                try:
-                    warm_up()                       # load the embedding model before the first question
-                except Exception as error:
-                    print(f"[rag] warm-up failed: {error}")
-                    
                 print(f"ARIA: {reply}")
                 speak(reply)
     except Exception:
