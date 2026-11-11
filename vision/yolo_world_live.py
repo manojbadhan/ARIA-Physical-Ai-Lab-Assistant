@@ -1,5 +1,5 @@
-
 import os
+import sys
 import time
 import queue
 import threading
@@ -18,7 +18,7 @@ CAMERA_INDEX = 0
 MODEL_PATH = "runs/detect/aria_baseline/weights/best.pt"
 
 CONFIDENCE = 0.50
-IMAGE_SIZE = 640
+IMAGE_SIZE = 640          # use 416 or 320 if Raspberry Pi is slow
 
 # Minimum time between Gemini requests
 GEMINI_COOLDOWN = 12
@@ -36,7 +36,7 @@ api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
     raise RuntimeError(
-        "GEMINI_API_KEY is missing. Set it in PowerShell first."
+        "GEMINI_API_KEY is missing. Set it first."
     )
 
 client = genai.Client(api_key=api_key)
@@ -44,10 +44,17 @@ client = genai.Client(api_key=api_key)
 # Only one pending image is allowed, so the queue cannot grow endlessly.
 image_queue = queue.Queue(maxsize=1)
 
+# ---- Shared values: your UI can read these (always use result_lock) ----
 result_lock = threading.Lock()
 latest_explanation = "Show a lab component to the camera."
 gemini_status = "Waiting for an object..."
-last_gemini_time = 0
+latest_label = None          # best detected object right now (or None)
+
+
+def get_state():
+    """UI calls this to get (label, status, explanation) as text."""
+    with result_lock:
+        return latest_label, gemini_status, latest_explanation
 
 
 # ---------------- GEMINI BACKGROUND WORKER ----------------
@@ -119,15 +126,22 @@ print("Classes:", model.names)
 
 # ---------------- OPEN CAMERA ----------------
 
-cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+def open_camera(index):
+    # CAP_DSHOW works only on Windows. Raspberry Pi uses the default.
+    if sys.platform.startswith("win"):
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(index)
+
+
+cap = open_camera(CAMERA_INDEX)
 
 if not cap.isOpened():
     cap.release()
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+    cap = open_camera(1)
 
 if not cap.isOpened():
     raise RuntimeError(
-        "Camera could not open. Check Camo Studio and camera permissions."
+        "Camera could not open. Check camera connection and permissions."
     )
 
 
@@ -139,7 +153,7 @@ worker = threading.Thread(
 )
 worker.start()
 
-print("ARIA live vision started. Press Q to quit.")
+print("ARIA live vision started (no camera window). Press Ctrl+C to quit.")
 
 
 # ---------------- CONTINUOUS DETECTION ----------------
@@ -164,7 +178,6 @@ try:
         )
 
         result = results[0]
-        annotated = result.plot()
 
         detected_label = None
         best_box = None
@@ -186,6 +199,10 @@ try:
                     best_score = score
                     detected_label = label
                     best_box = box
+
+        # Share the current label with the UI
+        with result_lock:
+            latest_label = detected_label
 
         # Send a crop to Gemini only when the label changes
         # and the cooldown has elapsed.
@@ -214,7 +231,6 @@ try:
             crop = frame[y1:y2, x1:x2]
 
             if crop.size > 0:
-                # Add a small margin around the detected object.
                 crop = cv2.resize(crop, (320, 320))
 
                 success, buffer = cv2.imencode(
@@ -235,50 +251,14 @@ try:
                     except queue.Full:
                         pass
 
-        # Show the latest Gemini explanation on the live video.
-        with result_lock:
-            explanation = latest_explanation
-            status = gemini_status
+        # No drawing, no imshow, no waitKey: camera stays hidden.
+        time.sleep(0.05)   # lets the Pi rest a little
 
-        cv2.putText(
-            annotated,
-            status[:75],
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 255),
-            2,
-        )
-
-        # Draw readable explanation lines at the bottom.
-        lines = [
-            explanation[i:i + 65]
-            for i in range(0, min(len(explanation), 195), 65)
-        ]
-
-        y = annotated.shape[0] - 15
-
-        for line in reversed(lines):
-            cv2.putText(
-                annotated,
-                line,
-                (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
-            y -= 22
-
-        cv2.imshow("ARIA - Live Detection + Gemini", annotated)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+except KeyboardInterrupt:
+    pass
 
 finally:
     cap.release()
-    cv2.destroyAllWindows()
 
     # Stop the background worker safely.
     try:
