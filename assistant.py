@@ -27,30 +27,29 @@ from config import (
 from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
 from rag.retrieve import get_retriever, build_context, warm_up
 
-# ---------------------------------------------------------------- wake word (strict)
-# ARIA only reacts to a sentence that contains the wake word ("ARIA" / "Hey ARIA").
-# These constants replace WAKE_WORD_REQUIRED and ACTIVE_WINDOW from config.py (those are no longer read).
 WAKE_REQUIRED = True
 CONVO_WINDOW = 0          # seconds a follow-up is accepted WITHOUT the wake word after a normal answer
 FOLLOWUP_WINDOW = 0       # same, when ARIA's reply ends with a question
-ARMED_SECONDS = 8         # after you say only "ARIA" and she answers, you have this long to ask your question
-
-# ---------------------------------------------------------------- protection against hearing herself
+ARMED_SECONDS = 15        # after you say only "ARIA" and she answers, you have this long to START your question
 ECHO_GUARD = 1.0          # minimum pause after she speaks before the mic is read again (hardware: speaker next to mic)
 SELF_HEAR_SECONDS = 4.0   # a short fragment right after she spoke is treated as her own voice coming back
 MAX_REPLIES_PER_MINUTE = 6  # if she would answer more often than this, something is feeding her own voice back
-
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
-LISTENING = "LISTENING - say ARIA, then ask"
+IDLE = "IDLE - say ARIA to wake me"     # asleep: the mic is only open to catch the wake word
+LISTENING = "LISTENING - ask now"        # awake: she is waiting for your question (s.awake is True)
 HEARING = "hearing you..."
-
-# ---------------------------------------------------------------- Piper (offline neural voice)
 _PIPER = {}
-PIPER_MODELS = {
-    "en": "~/ARIA/voices/en_US-ryan-medium.onnx",
-    "hi": "~/ARIA/voices/hi_IN-pratham-medium.onnx",
-}
+PIPER_FILES = {"en": "en_US-ryan-medium.onnx", "hi": "hi_IN-pratham-medium.onnx"}
+PIPER_DIRS = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices"),
+              os.path.expanduser("~/ARIA/voices")]
+
+def piper_path(language):
+    for folder in PIPER_DIRS:
+        path = os.path.join(folder, PIPER_FILES[language])
+        if os.path.exists(path):
+            return path
+    return os.path.join(PIPER_DIRS[0], PIPER_FILES[language])
 
 
 def piper_available():
@@ -61,9 +60,12 @@ def piper_available():
     except ImportError:
         print("[tts] piper not installed. Run: pip install piper-tts")
         return False
-    if not os.path.exists(os.path.expanduser(PIPER_MODELS["en"])):
-        print(f"[tts] piper English model not found at {PIPER_MODELS['en']}")
+    path = piper_path("en")
+    if not (os.path.exists(path) and os.path.exists(path + ".json")):
+        print(f"[tts] piper voice files not found. Put {PIPER_FILES['en']} AND {PIPER_FILES['en']}.json "
+              f"in {PIPER_DIRS[0]}")
         return False
+    print(f"[tts] piper voice: {path}")
     return True
 
 
@@ -71,7 +73,7 @@ def piper_fetch(text, language):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
     from piper import PiperVoice
     if language not in _PIPER:                      # load once, reuse
-        _PIPER[language] = PiperVoice.load(os.path.expanduser(PIPER_MODELS[language]))
+        _PIPER[language] = PiperVoice.load(piper_path(language))
     voice = _PIPER[language]
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -454,6 +456,7 @@ class Session:
         self.reply = ""
         self.reply_n = 0
         self.heard_n = 0
+        self.awake = False            # True only after the wake word, until she goes back to sleep
 
 
 def vision_intent(query):
@@ -550,9 +553,31 @@ def voice_worker(s):
         with MicListener() as mic:
             s.mic = mic
 
+            def awake_now():
+                return (not WAKE_REQUIRED) or time.time() < active_until
+
+            def rest_status():
+                """Back to rest: awake (LISTENING) only while the wake-word window is open, otherwise IDLE."""
+                if awake_now():
+                    s.status = LISTENING
+                    s.awake = True
+                else:
+                    s.status = IDLE
+                    s.awake = False
+
+            def status_ticker():
+                """The window closes by itself: LISTENING -> IDLE when time runs out."""
+                while not s.quit.is_set():
+                    if s.status == LISTENING and not awake_now():
+                        s.status = IDLE
+                        s.awake = False
+                    time.sleep(0.2)
+
+            threading.Thread(target=status_ticker, daemon=True).start()
+
             def on_speech_start():
                 speech_started[0] = time.time()
-                s.status = HEARING
+                s.status = HEARING                 # reacts when the user speaks; goes back to IDLE if no wake word
 
             def speak(text):
                 nonlocal active_until
@@ -575,40 +600,43 @@ def voice_worker(s):
                 # a reply that ends with a question may keep a short follow-up window open (0 = strict)
                 asks = "?" in text[-120:]
                 active_until = time.time() + (FOLLOWUP_WINDOW if asks else CONVO_WINDOW)
-                s.status = LISTENING
+                rest_status()
 
             speak(greeting(greet_language, ASSISTANT_GENDER))
             s.status = CALIBRATING
             mic.calibrate()
-            s.status = LISTENING
+            rest_status()
             while not s.quit.is_set():
                 path = mic.listen(s.quit, on_speech_start=on_speech_start)
                 if not path:
-                    s.status = LISTENING
+                    rest_status()
                     continue
-                s.status = "transcribing..."
+                if awake_now():
+                    s.status = "transcribing..."
                 heard, language = transcribe_speech(stt, path)
                 if not heard or len(heard.strip(" .!?।")) < 2:
                     s.heard = "(could not make out any words)"
                     mic.drain()
-                    s.status = LISTENING
+                    rest_status()
                     continue
                 since = max(0.0, (speech_started[0] or time.time()) - last_spoke_end[0])
                 if looks_like_echo(heard, spoken, since):
                     print(f"[echo] ignored (that was ARIA's own voice): {heard!r}")
                     s.heard = "(ignored: her own echo)"
                     mic.drain()
-                    s.status = LISTENING
+                    rest_status()
                     continue
                 query = apply_wake_word(heard, speech_started[0] or time.time(), active_until)
                 if query is None:
                     print(f"[wake] ignored (not addressed to ARIA): {heard!r}")
                     s.heard = f"(ignored, no ARIA) {heard}"
-                    s.status = LISTENING
+                    rest_status()
                     continue
+                s.awake = True                                   # the wake word was said
                 if query == "":
                     speak(WAKE_REPLIES[language])
                     active_until = time.time() + ARMED_SECONDS    # now she is listening for the question
+                    rest_status()
                     continue
                 s.heard = query
                 s.heard_n += 1
@@ -629,7 +657,7 @@ def voice_worker(s):
                     time.sleep(15)
                     mic.drain()
                     reply_times.clear()
-                    s.status = LISTENING
+                    rest_status()
                     continue
                 reply_times.append(now)
 
