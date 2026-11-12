@@ -51,7 +51,6 @@ def piper_path(language):
             return path
     return os.path.join(PIPER_DIRS[0], PIPER_FILES[language])
 
-
 def piper_available():
     """Piper is usable if the package is installed and the English model exists.
     A missing Hindi model only makes Hindi sentences fall back to Edge."""
@@ -67,7 +66,6 @@ def piper_available():
         return False
     print(f"[tts] piper voice: {path}")
     return True
-
 
 def piper_fetch(text, language):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
@@ -94,8 +92,7 @@ def piper_fetch(text, language):
                           np.arange(len(audio)), audio).astype(np.int16)
     return audio, out_rate
 
-
-# ---------------------------------------------------------------- helpers
+# helpers
 def find_class(package, name):
     for info in pkgutil.iter_modules(importlib.import_module(package).__path__):
         mod = importlib.import_module(f"{package}.{info.name}")
@@ -107,15 +104,12 @@ def find_class(package, name):
 def _get(obj, key, default=None):
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
 
-
 def is_devanagari(c):
     return "\u0900" <= c <= "\u097f"
-
 
 HINDI_WORDS = {"है", "हैं", "क्या", "मैं", "मुझे", "को", "का", "की", "के", "में", "से", "कर", "करो",
                "तो", "नहीं", "और", "यह", "वह", "था", "हो", "रहा", "रही", "आप", "तुम", "कैसे", "कौन",
                "क्यों", "कब", "कहाँ", "बताओ", "बताइए", "पर", "भी", "ही"}
-
 
 def _hindi_ok(text):
     letters = [c for c in text if c.isalpha()]
@@ -125,27 +119,23 @@ def _hindi_ok(text):
         return False
     return any(w in HINDI_WORDS for w in _tokens(text))
 
-
 def script_language(text):
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return "en"
     return "hi" if sum(is_devanagari(c) for c in letters) / len(letters) > 0.3 else "en"
 
-
 def _trusted(seg):
     return ((_get(seg, "no_speech_prob", 0) or 0) <= MAX_NO_SPEECH_PROB
             and (_get(seg, "avg_logprob", 0) or 0) >= MIN_AVG_LOGPROB
             and (_get(seg, "compression_ratio", 0) or 0) <= MAX_COMPRESSION_RATIO)
-
 
 def _foreign_ratio(text):
     def expected(c):
         return c.isascii() or (LANGUAGE in ("hi", "auto") and is_devanagari(c))
     return sum(not expected(c) for c in text) / len(text)
 
-
-# ---------------------------------------------------------------- speech to text
+# speech to text
 def _whisper(stt, path, language):
     kwargs = {"model": STT_MODELS.get(language, stt.model), "temperature": 0.0, "response_format": "verbose_json"}
     if language != "auto":
@@ -154,7 +144,6 @@ def _whisper(stt, path, language):
         kwargs["prompt"] = STT_PROMPTS[language]
     with open(path, "rb") as audio_file:
         return stt.client.audio.transcriptions.create(file=audio_file, **kwargs)
-
 
 def _text_of(result):
     segments = _get(result, "segments") or []
@@ -166,7 +155,6 @@ def _text_of(result):
         print(f"[stt] dropped low-confidence: {said!r}")
     return text
 
-
 def _detected(result):
     value = (_get(result, "language", "") or "").lower()
     if value in ("en", "english"):
@@ -174,7 +162,6 @@ def _detected(result):
     if value in ("hi", "hindi", "ur", "urdu"):
         return "hi"
     return value or None
-
 
 def transcribe_speech(stt, path):
     if not hasattr(stt, "client"):
@@ -204,10 +191,8 @@ def transcribe_speech(stt, path):
         print(f"[STT ERROR] {type(error).__name__}: {error}")
         return None, None
 
-
 def _tokens(text):
     return re.sub(r"[^\w\u0900-\u097F]+", " ", text.lower()).split()
-
 
 def looks_like_echo(heard, spoken_texts, since_spoke=None):
     """True if `heard` is ARIA's own voice coming back through the microphone.
@@ -226,14 +211,10 @@ def looks_like_echo(heard, spoken_texts, since_spoke=None):
             return True
     return False
 
-
-# ---------------------------------------------------------------- wake word
+# wake word
 GREETING_WORDS = {"hey", "hi", "hello", "ok", "okay"}
-
-
 def _clean_word(word):
     return word.strip(" ,.!?।-'\"").lower()
-
 
 def _is_wake(word):
     """Exact or fuzzy match. Used for the first few words of a sentence."""
@@ -244,18 +225,13 @@ def _is_wake(word):
         return True
     return w.isascii() and difflib.SequenceMatcher(None, w, "aria").ratio() >= WAKE_FUZZY_RATIO
 
-
 def _is_wake_exact(word):
     """Exact match only. Used for ARIA anywhere else in the sentence (no fuzzy = fewer false wakes)."""
     w = _clean_word(word)
     return bool(w) and w in WAKE_WORDS
 
-
 def apply_wake_word(query, started_at, active_until):
-    """Returns the question without the wake word, "" if only the wake word was said,
-    or None if ARIA was not addressed (the sentence is ignored).
-    started_at = when the user STARTED speaking. A sentence that starts before active_until
-    (the short window after the wake word) does not need the wake word again."""
+    
     words = query.split()
     lead = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
     anywhere = lead or any(_is_wake_exact(w) for w in words)
@@ -267,11 +243,8 @@ def apply_wake_word(query, started_at, active_until):
             if not (i < WAKE_WORD_POSITION and (_is_wake(w) or _clean_word(w) in GREETING_WORDS))]
     return " ".join(kept).strip(" ,.!?।-")
 
-
-# ---------------------------------------------------------------- text to speech
 _SPEECH_MAP = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
                              "\u2014": ", ", "\u2013": ", ", "\u2011": "-", "\u2026": "...", "\u00a0": " "})
-
 
 def clean_for_speech(text):
     text = text.translate(_SPEECH_MAP)
@@ -280,10 +253,8 @@ def clean_for_speech(text):
     text = "".join(c for c in text if c.isascii() or is_devanagari(c))
     return " ".join(text.split())
 
-
 def split_sentences(text):
-    """One chunk per sentence (very short ones are merged), so audio starts after the first sentence
-    and every online request is short enough not to time out."""
+    
     parts = [p for p in re.split(r"(?<=[.!?।])\s+", text.strip()) if p]
     chunks = []
     for p in parts:
@@ -317,7 +288,6 @@ def choose_voice(tts, language):
         return True
     return language == "en"
 
-
 def edge_available():
     try:
         import edge_tts  # noqa: F401
@@ -327,7 +297,6 @@ def edge_available():
         print(f"[tts] online voices are not installed ({error}). Run: pip install edge-tts miniaudio")
         return False
 
-
 async def _edge_audio(text, voice):
     import edge_tts
     data = bytearray()
@@ -335,7 +304,6 @@ async def _edge_audio(text, voice):
         if chunk["type"] == "audio":
             data += chunk["data"]
     return bytes(data)
-
 
 def edge_fetch(text, language):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
@@ -348,11 +316,9 @@ def edge_fetch(text, language):
     decoded = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
     return np.frombuffer(decoded.samples, dtype=np.int16), rate
 
-
 def _play(samples, rate):
     sd.play(samples, rate, latency="high")
     sd.wait()
-
 
 def _play_chunks(chunks, fetch, progress):
     """Play chunk i while chunk i+1 is already being made. progress[] records what was really spoken,
@@ -602,10 +568,9 @@ def voice_worker(s):
                 active_until = time.time() + (FOLLOWUP_WINDOW if asks else CONVO_WINDOW)
                 rest_status()
 
-            speak(greeting(greet_language, ASSISTANT_GENDER))
             s.status = CALIBRATING
-            mic.calibrate()
-            rest_status()
+            mic.calibrate()          # measure the room BEFORE she speaks, so her greeting can not leak into it
+            speak(greeting(greet_language, ASSISTANT_GENDER))
             while not s.quit.is_set():
                 path = mic.listen(s.quit, on_speech_start=on_speech_start)
                 if not path:
