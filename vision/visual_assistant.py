@@ -12,7 +12,7 @@ if not api_key:
     )
 
 # You can override this model name in PowerShell if needed.
-model_name = "gemini-2.5-flash"
+model_name = "gemini-3.5-flash"
 client = genai.Client(api_key=api_key)
 
 # Open Camo Studio camera
