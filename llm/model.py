@@ -27,9 +27,8 @@ class LabAssistantLLM:
             user_message = (
                 f"Relevant notes:\n{retrieved_context}\n\n"
                 f"Question: {user_message}\n\n"
-                "Answer using only the notes above. If the notes don't "
-                "cover this, say clearly that you don't have information "
-                "on it — do not guess."
+                "Answer from the notes above. If they do not cover it, say so briefly, "
+                "and use general tech knowledge only if you are sure."
             )
 
         messages.append({"role": "user", "content": user_message})

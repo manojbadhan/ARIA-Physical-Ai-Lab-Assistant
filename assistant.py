@@ -442,13 +442,15 @@ def vision_intent(query):
     return None
 
 
-# ---------------------------------------------------------------- notes (RAG) or general answer
+# ---------------------------------------------------------------- notes (RAG) or general answer 
 OUTSIDE_NOTES_RULE = (
-    "The lab notes do NOT cover this question. If it is about how to operate, maintain or stay safe "
-    "with specific lab equipment, say briefly that it is not in the lab notes and suggest asking the "
-    "lab staff. Otherwise answer briefly from general knowledge, starting with a short cue that this "
-    "is not from the lab notes. Keep the answer short enough to be spoken."
+    "The lab notes do not cover this question. If it is about operating, maintaining or staying "
+    "safe with specific lab equipment, say briefly that it is not in the lab notes and suggest "
+    "asking the lab staff. If it is another technology question, answer briefly from general "
+    "knowledge, starting with a short cue that this is not from the lab notes. Follow the scope "
+    "rules above for anything unrelated to technology."
 )
+
 
 
 def answer_query(llm, query, objects, history, language):
@@ -456,7 +458,11 @@ def answer_query(llm, query, objects, history, language):
     rules = system_rules(language, ASSISTANT_GENDER)
     hits = []
     try:
-        hits = get_retriever().search(query, objects)
+        search_q = query
+        if len(query.split()) < 4 and history:      # short follow-up like "yes": reuse the last question
+            last = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+            search_q = f"{last} {query}"
+        hits = get_retriever().search(search_q, objects)
     except Exception as error:                      # never let RAG break the voice loop
         print(f"[rag ERROR] {type(error).__name__}: {error}")
     if hits:
