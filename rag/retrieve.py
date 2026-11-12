@@ -123,9 +123,23 @@ def ask(query, objects=None, history=None, llm=None):
     return {"answer": answer, "speech": for_speech(answer),
             "sources": sources_of(hits), "found": True}
 
+def ensure_store():
+    """Build or update the database from notes/ (only new or changed files are embedded).
+    This makes a fresh machine, such as the Pi, work without a manual ingest."""
+    try:
+        ingest.ingest_all()
+    except SystemExit as error:                 # ingest_all exits when notes/ is missing or empty
+        print(f"[rag] NO NOTES FOUND: {error}")
+    except Exception as error:
+        print(f"[rag] ingest failed: {type(error).__name__}: {error}")
+
 
 def warm_up():
-    get_retriever().search("warm up")      # loads the embedding model and the database
+    ensure_store()
+    retriever = get_retriever()
+    retriever.reload()
+    print(f"[rag] ready: {len(retriever.chunks)} chunks loaded")
+    retriever.search("warm up")                 # loads the embedding model
 
 
 if __name__ == "__main__":                      # python -m rag.retrieve "your question"
