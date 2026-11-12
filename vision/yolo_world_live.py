@@ -12,7 +12,7 @@ from google.genai import types
 
 # ---------------- CONFIGURATION ----------------
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 4
 
 # Your custom-trained model
 MODEL_PATH = "runs/detect/aria_baseline/weights/best.pt"
