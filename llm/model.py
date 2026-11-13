@@ -39,10 +39,14 @@ class LabAssistantLLM:
                 model=self.model,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=150,    # replies are spoken: ~35 words is plenty, and short = faster TTS
+                max_tokens=600,    # replies are spoken: ~35 words is plenty, and short = faster TTS
                 timeout=30,
             )
-            return response.choices[0].message.content
+            text = (response.choices[0].message.content or "").strip()
+            if not text:
+                print(f"[LLM] empty reply (finish_reason={response.choices[0].finish_reason})")
+                return "Sorry, could you say that again?"
+            return text
 
         # Groq's SDK raises various exception types (APIConnectionError,
         # APITimeoutError, RateLimitError, etc.) - catching broadly here
