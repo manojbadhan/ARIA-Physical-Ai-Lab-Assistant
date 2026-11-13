@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Ask ARIA{% endblock %}
+{% block content %}
+<div class="wrap page">
+  <div class="page-head"><div><p class="mono">Voice and vision</p><h1>Ask ARIA</h1></div></div>
+  <div class="chat">
+    <section class="thread" aria-label="Conversation">
+      <div class="msgs" id="msgs" aria-live="polite"></div>
+      <form class="composer" id="chatForm">
+        <button type="button" class="mic" id="micBtn" aria-label="Speak">&#127908;</button>
+        <label class="sr" for="chatInput">Message</label>
+        <input id="chatInput" placeholder="Where is the multimeter?" autocomplete="off">
+        <button class="b">Send</button>
+      </form>
+    </section>
+    <aside class="card cam">
+      <h3>Camera</h3>
+      <video id="camVideo" autoplay playsinline muted></video>
+      <div style="display:flex;gap:8px"><button class="b sm" id="camStart" type="button">Start camera</button><button class="b sm ghost" id="camSnap" type="button">Identify</button></div>
+      <p class="mono">Hold a tool up and press Identify.</p>
+    </aside>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/voice.js') }}"></script>
+<script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+{% endblock %}

@@ -1,7 +1,6 @@
 from groq import Groq
 from config import GROQ_API_KEY, STT_MODEL
 
-
 class SpeechToText:
 
     def __init__(self):

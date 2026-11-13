@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{% block title %}ARIA{% endblock %} · Physical AI Lab Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Syne:wght@700;800&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</head>
+<body>
+{% block shell %}
+<header class="topbar">
+  <div style="display:flex;gap:12px;align-items:center">
+    {% if show_nav %}<button class="menu" id="menuBtn" aria-label="Menu">&#9776;</button>{% endif %}
+    <a class="brand" href="/">AR<b>I</b>A</a>
+  </div>
+  <button class="theme-toggle" id="themeToggle">Light mode</button>
+</header>
+{% if show_nav %}
+<div class="edge"></div>
+<nav class="sb" aria-label="Main">
+  <a class="brand" href="/">AR<b>I</b>A</a>
+  <a href="/dashboard" class="{{ 'on' if active=='dashboard' }}">Dashboard</a>
+  <a href="/chat" class="{{ 'on' if active=='chat' }}">Ask ARIA</a>
+  <a href="/inventory" class="{{ 'on' if active=='inventory' }}">Inventory</a>
+  <a href="/faculty" class="{{ 'on' if active=='faculty' }}">Faculty</a>
+  <span class="grow"></span>
+  <a href="/login">Sign out</a>
+</nav>
+{% endif %}
+<main>{% block content %}{% endblock %}</main>
+{% endblock %}
+<div class="toast" id="toast" role="status"></div>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,11 @@
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat b{font:800 38px var(--hf)}
+.stat span{color:var(--mut);font-size:14px}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.gallery figure{background:var(--panel2);border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+.gallery img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;background:var(--panel)}
+.gallery figcaption{padding:9px 11px;font-size:13px;color:var(--mut)}
+.drop{border:1.5px dashed var(--line);border-radius:14px;padding:28px;text-align:center;color:var(--mut);cursor:pointer;transition:border-color .2s,background .2s}
+.drop:hover,.drop.over{border-color:var(--acc2);background:color-mix(in srgb,var(--acc2) 8%,transparent)}
+.bar{height:6px;border-radius:9px;background:var(--panel2);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--acc2)}

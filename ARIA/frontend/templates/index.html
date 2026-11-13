@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<section class="wrap hero">
+  <div>
+    <p class="mono">GNDU Amritsar &middot; M.Tech AI &amp; Robotics</p>
+    <h1>ARIA</h1>
+    <p class="lead">A lab assistant that sees the bench, hears the question, and remembers where every tool was left.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <a class="b" href="/signup">Get started <i class="ar"></i></a>
+      <a class="b ghost" href="/login">Log in</a>
+    </div>
+  </div>
+  <div class="orb" role="img" aria-label="ARIA listening indicator"></div>
+</section>
+<section class="wrap grid g3" style="padding-bottom:80px">
+  <article class="card"><h3>Ask by voice</h3><p>Say the wake word, ask about a board or a sensor. Answers stay on tech and lab topics.</p></article>
+  <article class="card"><h3>Find any tool</h3><p>"Where is the multimeter?" Rack, box and a photo of its last spot.</p></article>
+  <article class="card"><h3>Faculty control</h3><p>Professors upload tool photos, tag locations and review who used what.</p></article>
+</section>
+{% endblock %}

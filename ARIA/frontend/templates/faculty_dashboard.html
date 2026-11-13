@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Faculty{% endblock %}
+{% block content %}
+<div class="wrap page">
+  <div class="page-head"><div><p class="mono">Faculty only</p><h1>Tool registry</h1></div></div>
+  <div class="grid g2">
+    <form class="card" id="toolForm">
+      <h3>Add tools from a photo</h3><p style="margin-bottom:14px">Upload a photo of a box. The model tags the tools, you set where the box lives.</p>
+      <div class="drop" id="drop" role="button" tabindex="0">Drop a photo here or click to choose</div>
+      <input type="file" id="toolPhoto" name="photo" accept="image/*" class="sr">
+      <div class="grid g3" style="margin:16px 0 0">
+        <div class="field"><label for="alm">ALMIRAH</label><input id="alm" name="almirah" placeholder="A"></div>
+        <div class="field"><label for="rack">RACK</label><input id="rack" name="rack" placeholder="2"></div>
+        <div class="field"><label for="box">BOX</label><input id="box" name="box" placeholder="3"></div>
+      </div>
+      <button class="b" style="width:100%">Save location <i class="ar"></i></button>
+    </form>
+    <section class="card">
+      <h3>Students using tools</h3><p style="margin-bottom:14px">Photos sent by the robot when someone picks up a tool.</p>
+      <div class="gallery" id="usage"><p class="mono">No photos yet</p></div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/faculty.js') }}"></script>
+<script>api('/api/faculty/usage').then(function(d){if(d.items&&d.items.length)usage.innerHTML=d.items.map(function(r){return '<figure><img src="'+r.photo+'" alt=""><figcaption>'+r.tool+' &middot; '+r.when+'</figcaption></figure>'}).join('')}).catch(function(){});</script>
+{% endblock %}

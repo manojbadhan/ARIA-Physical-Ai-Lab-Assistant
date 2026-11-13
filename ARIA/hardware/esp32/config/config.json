@@ -1,0 +1,1 @@
+{"baud": 115200, "led_pin": 2, "servo_pin": 18, "heartbeat_ms": 1000}

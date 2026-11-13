@@ -1,0 +1,11 @@
+.chat{display:grid;grid-template-columns:1fr 340px;gap:16px;height:calc(100vh - 150px)}
+.thread{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.msgs{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:78%;padding:11px 15px;border-radius:14px;background:var(--panel2);white-space:pre-wrap}
+.msg.me{align-self:flex-end;background:var(--acc);color:var(--bhi)}
+.msg.sys{align-self:center;font:12px var(--mf);color:var(--mut);background:none}
+.composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--line)}
+.mic{width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:var(--panel2);color:var(--ink);cursor:pointer;flex:none;transition:.2s}
+.mic.rec{background:var(--acc2);color:var(--bpi);animation:breathe 1.2s infinite}
+.cam{display:flex;flex-direction:column;gap:12px}
+.cam video,.cam canvas,.cam img{width:100%;border-radius:12px;background:var(--panel2);aspect-ratio:4/3;object-fit:cover}

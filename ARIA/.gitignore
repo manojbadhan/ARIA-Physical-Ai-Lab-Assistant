@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+storage/aria.db
+storage/detections/*
+storage/logs/*
+storage/embeddings/*
+!storage/**/.gitkeep
+*.pt
+.pytest_cache/

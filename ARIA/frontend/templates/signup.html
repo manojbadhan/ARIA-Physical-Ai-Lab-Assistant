@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Sign up{% endblock %}
+{% block content %}
+<section class="auth"><form class="card" method="post" action="/api/auth/signup">
+  <h1 style="font-size:36px;margin-bottom:18px">Create account</h1>
+  <div class="field"><label for="name">NAME</label><input id="name" name="name" required></div>
+  <div class="field"><label for="email">EMAIL</label><input id="email" name="email" type="email" autocomplete="username" required></div>
+  <div class="field"><label for="role">I AM A</label><select id="role" name="role"><option value="student">Student</option><option value="faculty">Faculty</option></select></div>
+  <div class="field"><label for="pw">PASSWORD</label><input id="pw" name="password" type="password" autocomplete="new-password" minlength="8" required></div>
+  <button class="b" style="width:100%">Sign up <i class="ar"></i></button>
+  <p class="mono" style="margin-top:16px">Already registered? <a href="/login">Log in</a></p>
+</form></section>
+{% endblock %}

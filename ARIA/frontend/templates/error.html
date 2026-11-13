@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Error{% endblock %}
+{% block content %}
+<section class="auth"><div class="card" style="text-align:left">
+  <p class="mono">Error {{ code|default(404) }}</p>
+  <h1 style="font-size:44px;margin:6px 0 12px">{{ message|default("Page not found") }}</h1>
+  <a class="b" href="/">Back home <i class="ar"></i></a>
+</div></section>
+{% endblock %}

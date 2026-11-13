@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="wrap page">
+  <div class="page-head"><div><p class="mono">Lab overview</p><h1>Dashboard</h1></div><a class="b" href="/chat">Ask ARIA <i class="ar"></i></a></div>
+  <div class="grid g4">
+    <div class="card stat"><b id="sTools">--</b><span>Tools tracked</span></div>
+    <div class="card stat"><b id="sMissing">--</b><span>Missing now</span></div>
+    <div class="card stat"><b id="sQ">--</b><span>Questions today</span></div>
+    <div class="card stat"><b id="sUse">--</b><span>Tool uses logged</span></div>
+  </div>
+  <h2 style="margin:36px 0 14px;font-size:24px">Recent detections</h2>
+  <div class="gallery" id="recent"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+api('/api/inventory/stats').then(function(d){
+  sTools.textContent=d.tools;sMissing.textContent=d.missing;sQ.textContent=d.questions;sUse.textContent=d.uses;
+  recent.innerHTML=(d.recent||[]).map(function(r){return '<figure><img src="'+r.photo+'" alt=""><figcaption>'+r.label+' &middot; '+r.when+'</figcaption></figure>'}).join('')||'<p class="mono">No detections yet</p>';
+}).catch(function(){toast('Backend not connected, showing empty state');recent.innerHTML='<p class="mono">No detections yet</p>';});
+</script>
+{% endblock %}

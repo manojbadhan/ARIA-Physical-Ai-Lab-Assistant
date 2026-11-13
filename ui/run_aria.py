@@ -34,5 +34,5 @@ def run_existing():
 threading.Thread(target=run_existing, daemon=True).start()
 
 # 3) Show the ARIA screen (must be on the main thread). Closing it ends everything.
-import aria_ui
+import ui.aria_ui as aria_ui
 aria_ui.show(windowed)

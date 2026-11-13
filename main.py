@@ -167,7 +167,7 @@ def run_cv_window(aria):
 def run_ui(aria):
     """New mode: ARIA screen (ui.py). Run with:  python main.py [--windowed]"""
     aria.start()
-    import ui                              # imported late so --cv mode never loads PySide6
+    import ui.ui as ui                              # imported late so --cv mode never loads PySide6
     try:
         ui.show(aria.s, get_frame=lambda: aria.latest_display)
     except KeyboardInterrupt:

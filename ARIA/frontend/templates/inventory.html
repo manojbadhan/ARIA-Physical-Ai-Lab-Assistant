@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Inventory{% endblock %}
+{% block content %}
+<div class="wrap page">
+  <div class="page-head"><div><p class="mono">Last known locations</p><h1>Inventory</h1></div>
+    <div style="min-width:260px"><label class="sr" for="invSearch">Search</label><input id="invSearch" placeholder="Search tool or rack"></div></div>
+  <div class="card" style="padding:6px;overflow:auto">
+    <table class="table"><thead><tr><th>TOOL</th><th>LOCATION</th><th>STATUS</th><th>UPDATED</th></tr></thead><tbody id="invBody"></tbody></table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/inventory.js') }}"></script>{% endblock %}

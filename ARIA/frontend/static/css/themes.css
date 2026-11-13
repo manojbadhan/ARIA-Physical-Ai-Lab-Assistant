@@ -1,0 +1,17 @@
+/* Reference 1 type system. Dark = palette 3, Light = palette 6 (from the reference file). */
+:root{
+  --hf:'Syne',system-ui,sans-serif;--bf:'Manrope',system-ui,sans-serif;--mf:'JetBrains Mono',ui-monospace,monospace;
+  --arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:root,[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b0b0d;--panel:#141418;--panel2:#1d1d24;--line:rgba(255,255,255,.13);
+  --ink:#f3f1ec;--mut:#a7a7b1;--acc:#582eff;--acc2:#52ffa5;
+  --btn:#e8e6f6;--btni:#0b0b0d;--bh:#582eff;--bhi:#fff;--bp:#52ffa5;--bpi:#03140b;--bad:#ff9b9b;
+}
+[data-theme="light"]{
+  color-scheme:light;
+  --bg:#eef1ff;--panel:#fff;--panel2:#e3e1ff;--line:rgba(31,27,77,.2);
+  --ink:#1f1b4d;--mut:#55528a;--acc:#a39fff;--acc2:#4a45c2;
+  --btn:#abe2ff;--btni:#1f1b4d;--bh:#a39fff;--bhi:#1f1b4d;--bp:#dcf7df;--bpi:#1f1b4d;--bad:#b3261e;
+}

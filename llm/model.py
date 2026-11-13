@@ -1,7 +1,9 @@
 from groq import Groq
 from config import GROQ_API_KEY, GROQ_MODEL
 from groq import APIConnectionError, APITimeoutError, RateLimitError
-from llm.prompts import SYSTEM_PROMPT , RAG_SYSTEM_PROMPT
+from llm.prompts import SYSTEM_PROMPT
+
+
 class LabAssistantLLM:
 
     def __init__(self):
@@ -22,13 +24,12 @@ class LabAssistantLLM:
         if conversation_history:
             messages.extend(conversation_history[-max_history_turns:])
 
-        # if RAG found relevant notes, ground the question in them
+        # If RAG found notes, offer them as optional help. If it found nothing, the question goes
+        # to the LLM on its own and nothing is said about notes either way.
         if retrieved_context:
             user_message = (
-                f"Relevant notes:\n{retrieved_context}\n\n"
-                f"Question: {user_message}\n\n"
-                "Answer from the notes above. If they do not cover it, say so briefly, "
-                "and use general tech knowledge only if you are sure."
+                f"Lab notes (use them only if they help, and never mention them):\n{retrieved_context}\n\n"
+                f"Question: {user_message}"
             )
 
         messages.append({"role": "user", "content": user_message})
@@ -37,14 +38,14 @@ class LabAssistantLLM:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.3,   # lower = more grounded, less improvised
-                max_tokens=1000,
+                temperature=0.3,
+                max_tokens=150,    # replies are spoken: ~35 words is plenty, and short = faster TTS
                 timeout=30,
             )
             return response.choices[0].message.content
 
         # Groq's SDK raises various exception types (APIConnectionError,
-        # APITimeoutError, RateLimitError, etc.) — catching broadly here
+        # APITimeoutError, RateLimitError, etc.) - catching broadly here
         # keeps the assistant from crashing mid-demo; log the real error
         # for debugging instead of hiding it entirely.
         except APIConnectionError:
@@ -52,10 +53,11 @@ class LabAssistantLLM:
         except APITimeoutError:
             return "The model took too long to respond. Please try again."
         except RateLimitError:
-            return "I'm being rate-limited right now — please wait a moment and try again."
+            return "I'm being rate-limited right now - please wait a moment and try again."
         except Exception as error:
             print(f"[LLM ERROR] {error}")
             return "Something went wrong generating a response."
+
 
 if __name__ == "__main__":
     llm = LabAssistantLLM()

@@ -18,61 +18,56 @@ from audio.listener import MicListener
 from vision.gemini_vision import analyze
 from chat.prompts2 import WAKE_REPLIES, build_message, greeting, system_rules
 from config import (
-    ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
-    EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, GREETING_LANGUAGE, HISTORY_MESSAGES, LANGUAGE,
+    ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
+    EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, HISTORY_MESSAGES,
     MAX_COMPRESSION_RATIO, MAX_FOREIGN_RATIO, MAX_NO_SPEECH_PROB, MIN_AVG_LOGPROB, PAUSE_VISION_WHILE_SPEAKING,
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
-    WAKE_WORDS, HINDI_MIN_DEVA_RATIO, HINDI_MIN_LETTERS
+    WAKE_WORD_REQUIRED, WAKE_WORDS
 )
-from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
-from rag.retrieve import get_retriever, build_context, warm_up
+from llm.prompts import SYSTEM_PROMPT
 
-WAKE_REQUIRED = True
-CONVO_WINDOW = 0          # seconds a follow-up is accepted WITHOUT the wake word after a normal answer
-FOLLOWUP_WINDOW = 0       # same, when ARIA's reply ends with a question
-ARMED_SECONDS = 15        # after you say only "ARIA" and she answers, you have this long to START your question
-ECHO_GUARD = 1.0          # minimum pause after she speaks before the mic is read again (hardware: speaker next to mic)
-SELF_HEAR_SECONDS = 4.0   # a short fragment right after she spoke is treated as her own voice coming back
-MAX_REPLIES_PER_MINUTE = 6  # if she would answer more often than this, something is feeding her own voice back
+LANG = "en"        # ARIA is English only
+
 LOADING = "loading..."
 CALIBRATING = "calibrating mic - stay quiet"
-IDLE = "IDLE - say ARIA to wake me"     # asleep: the mic is only open to catch the wake word
-LISTENING = "LISTENING - ask now"        # awake: she is waiting for your question (s.awake is True)
+LISTENING = "LISTENING - say ARIA, then ask" if WAKE_WORD_REQUIRED else "LISTENING - just ask"
 HEARING = "hearing you..."
-_PIPER = {}
-PIPER_FILES = {"en": "en_US-ryan-medium.onnx", "hi": "hi_IN-pratham-medium.onnx"}
-PIPER_DIRS = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices"),
-              os.path.expanduser("~/ARIA/voices")]
 
-def piper_path(language):
-    for folder in PIPER_DIRS:
-        path = os.path.join(folder, PIPER_FILES[language])
-        if os.path.exists(path):
-            return path
-    return os.path.join(PIPER_DIRS[0], PIPER_FILES[language])
+# ---------------------------------------------------------------- conversation mode
+# After ARIA answers, the user can keep talking WITHOUT saying "ARIA" for this long.
+CONVO_WINDOW = max(ACTIVE_WINDOW, 45)      # seconds, after a normal answer
+FOLLOWUP_WINDOW = 90                       # seconds, when ARIA's reply ends with a question
+
+# Even after the window above has closed, phrases that clearly continue the last answer
+# ("tell me in detail", "explain more") are accepted for this many seconds after ARIA's reply.
+FOLLOWUP_GRACE = 120
+FOLLOWUP_STARTS = ("tell me more", "tell me in detail", "in detail", "explain", "give me an example",
+                   "what about", "and what", "how come", "why")
+
+# ---------------------------------------------------------------- Piper (offline neural voice)
+_PIPER = {}
+PIPER_MODEL = "~/ARIA/voices/en_US-ryan-medium.onnx"
+
 
 def piper_available():
-    """Piper is usable if the package is installed and the English model exists.
-    A missing Hindi model only makes Hindi sentences fall back to Edge."""
+    """Piper is usable if the package is installed and the English model exists."""
     try:
         import piper  # noqa: F401
     except ImportError:
         print("[tts] piper not installed. Run: pip install piper-tts")
         return False
-    path = piper_path("en")
-    if not (os.path.exists(path) and os.path.exists(path + ".json")):
-        print(f"[tts] piper voice files not found. Put {PIPER_FILES['en']} AND {PIPER_FILES['en']}.json "
-              f"in {PIPER_DIRS[0]}")
+    if not os.path.exists(os.path.expanduser(PIPER_MODEL)):
+        print(f"[tts] piper English model not found at {PIPER_MODEL}")
         return False
-    print(f"[tts] piper voice: {path}")
     return True
 
-def piper_fetch(text, language):
+
+def piper_fetch(text):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
     from piper import PiperVoice
-    if language not in _PIPER:                      # load once, reuse
-        _PIPER[language] = PiperVoice.load(piper_path(language))
-    voice = _PIPER[language]
+    if "en" not in _PIPER:                          # load once, reuse
+        _PIPER["en"] = PiperVoice.load(os.path.expanduser(PIPER_MODEL))
+    voice = _PIPER["en"]
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         try:
@@ -92,7 +87,8 @@ def piper_fetch(text, language):
                           np.arange(len(audio)), audio).astype(np.int16)
     return audio, out_rate
 
-# helpers
+
+# ---------------------------------------------------------------- helpers
 def find_class(package, name):
     for info in pkgutil.iter_modules(importlib.import_module(package).__path__):
         mod = importlib.import_module(f"{package}.{info.name}")
@@ -104,46 +100,28 @@ def find_class(package, name):
 def _get(obj, key, default=None):
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
 
-def is_devanagari(c):
-    return "\u0900" <= c <= "\u097f"
-
-HINDI_WORDS = {"है", "हैं", "क्या", "मैं", "मुझे", "को", "का", "की", "के", "में", "से", "कर", "करो",
-               "तो", "नहीं", "और", "यह", "वह", "था", "हो", "रहा", "रही", "आप", "तुम", "कैसे", "कौन",
-               "क्यों", "कब", "कहाँ", "बताओ", "बताइए", "पर", "भी", "ही"}
-
-def _hindi_ok(text):
-    letters = [c for c in text if c.isalpha()]
-    if len(letters) < HINDI_MIN_LETTERS:
-        return False
-    if sum(is_devanagari(c) for c in letters) / len(letters) < HINDI_MIN_DEVA_RATIO:
-        return False
-    return any(w in HINDI_WORDS for w in _tokens(text))
-
-def script_language(text):
-    letters = [c for c in text if c.isalpha()]
-    if not letters:
-        return "en"
-    return "hi" if sum(is_devanagari(c) for c in letters) / len(letters) > 0.3 else "en"
 
 def _trusted(seg):
     return ((_get(seg, "no_speech_prob", 0) or 0) <= MAX_NO_SPEECH_PROB
             and (_get(seg, "avg_logprob", 0) or 0) >= MIN_AVG_LOGPROB
             and (_get(seg, "compression_ratio", 0) or 0) <= MAX_COMPRESSION_RATIO)
 
-def _foreign_ratio(text):
-    def expected(c):
-        return c.isascii() or (LANGUAGE in ("hi", "auto") and is_devanagari(c))
-    return sum(not expected(c) for c in text) / len(text)
 
-# speech to text
-def _whisper(stt, path, language):
-    kwargs = {"model": STT_MODELS.get(language, stt.model), "temperature": 0.0, "response_format": "verbose_json"}
-    if language != "auto":
-        kwargs["language"] = language
-    if STT_PROMPTS.get(language):
-        kwargs["prompt"] = STT_PROMPTS[language]
+def _foreign_ratio(text):
+    """Share of characters that are not plain English text (catches Korean/Arabic/other-script junk)."""
+    return sum(not c.isascii() for c in text) / len(text)
+
+
+# ---------------------------------------------------------------- speech to text
+def _whisper(stt, path):
+    """One Whisper call, language forced to English (no auto-detect, no retry pass)."""
+    kwargs = {"model": STT_MODELS.get(LANG, stt.model), "temperature": 0.0,
+              "response_format": "verbose_json", "language": LANG}
+    if STT_PROMPTS.get(LANG):
+        kwargs["prompt"] = STT_PROMPTS[LANG]
     with open(path, "rb") as audio_file:
         return stt.client.audio.transcriptions.create(file=audio_file, **kwargs)
+
 
 def _text_of(result):
     segments = _get(result, "segments") or []
@@ -155,55 +133,32 @@ def _text_of(result):
         print(f"[stt] dropped low-confidence: {said!r}")
     return text
 
-def _detected(result):
-    value = (_get(result, "language", "") or "").lower()
-    if value in ("en", "english"):
-        return "en"
-    if value in ("hi", "hindi", "ur", "urdu"):
-        return "hi"
-    return value or None
 
 def transcribe_speech(stt, path):
+    """Returns (text, "en") or (None, None)."""
     if not hasattr(stt, "client"):
         text = stt.transcribe(path)
-        return (text, script_language(text)) if text else (None, None)
+        return (text, LANG) if text else (None, None)
     try:
-        result = _whisper(stt, path, LANGUAGE)
-        text = _text_of(result)
-        if LANGUAGE == "auto" and text:
-            detected = _detected(result)
-            arabic_script = any("\u0600" <= c <= "\u06ff" for c in text)
-            if detected not in (None, "en", "hi") and not arabic_script:
-                print(f"[stt] heard {detected}, retrying as English: {text!r}")
-                text = _text_of(_whisper(stt, path, "en"))
-            if arabic_script or (detected == "hi" and script_language(text) == "en"):
-                text = _text_of(_whisper(stt, path, "hi"))
-        if LANGUAGE == "auto" and text and script_language(text) == "hi" and not _hindi_ok(text):
-            print(f"[stt] weak Hindi, retrying as English: {text!r}")
-            text = _text_of(_whisper(stt, path, "en"))
+        text = _text_of(_whisper(stt, path))
         if not text:
             return None, None
         if _foreign_ratio(text) > MAX_FOREIGN_RATIO:
-            print(f"[stt] dropped wrong-language text: {text!r}")
+            print(f"[stt] dropped non-English text: {text!r}")
             return None, None
-        return text, (script_language(text) if LANGUAGE == "auto" else LANGUAGE)
+        return text, LANG
     except Exception as error:
         print(f"[STT ERROR] {type(error).__name__}: {error}")
         return None, None
 
-def _tokens(text):
-    return re.sub(r"[^\w\u0900-\u097F]+", " ", text.lower()).split()
 
-def looks_like_echo(heard, spoken_texts, since_spoke=None):
-    """True if `heard` is ARIA's own voice coming back through the microphone.
-    since_spoke = seconds between the end of her last reply and the start of this sound."""
+def _tokens(text):
+    return re.sub(r"[^\w]+", " ", text.lower()).split()
+
+
+def looks_like_echo(heard, spoken_texts):
     words = _tokens(heard)
-    if not words:
-        return False
     if len(words) < 3:
-        # a short fragment (often just "ARIA") right after she spoke is almost always her own voice
-        if since_spoke is not None and since_spoke < SELF_HEAR_SECONDS:
-            return any(all(w in set(_tokens(t)) for w in words) for t in spoken_texts)
         return False
     for text in spoken_texts:
         said = set(_tokens(text))
@@ -211,10 +166,11 @@ def looks_like_echo(heard, spoken_texts, since_spoke=None):
             return True
     return False
 
-# wake word
-GREETING_WORDS = {"hey", "hi", "hello", "ok", "okay"}
+
+# ---------------------------------------------------------------- wake word
 def _clean_word(word):
-    return word.strip(" ,.!?।-'\"").lower()
+    return word.strip(" ,.!?-'\"").lower()
+
 
 def _is_wake(word):
     """Exact or fuzzy match. Used for the first few words of a sentence."""
@@ -225,37 +181,49 @@ def _is_wake(word):
         return True
     return w.isascii() and difflib.SequenceMatcher(None, w, "aria").ratio() >= WAKE_FUZZY_RATIO
 
+
 def _is_wake_exact(word):
     """Exact match only. Used for ARIA anywhere else in the sentence (no fuzzy = fewer false wakes)."""
     w = _clean_word(word)
     return bool(w) and w in WAKE_WORDS
 
-def apply_wake_word(query, started_at, active_until):
-    
+
+def apply_wake_word(query, started_at, active_until, last_reply_at=0.0):
+    """started_at = when the user STARTED speaking (not when transcription finished).
+    Inside the conversation window no wake word is needed. After it closes, a phrase that clearly
+    continues ARIA's last answer ("tell me in detail...") is still accepted for FOLLOWUP_GRACE seconds."""
     words = query.split()
     lead = any(_is_wake(w) for w in words[:WAKE_WORD_POSITION])
     anywhere = lead or any(_is_wake_exact(w) for w in words)
-    if not anywhere and WAKE_REQUIRED and started_at > active_until:
+    if not anywhere and WAKE_WORD_REQUIRED and started_at > active_until:
+        low = query.lower().strip(" ,.!?-")
+        if (last_reply_at and started_at - last_reply_at <= FOLLOWUP_GRACE
+                and low.startswith(FOLLOWUP_STARTS)):
+            return query
         return None
     if not lead:
         return query                      # keep "ARIA" if it was said at the end, it is part of the question
-    kept = [w for i, w in enumerate(words)
-            if not (i < WAKE_WORD_POSITION and (_is_wake(w) or _clean_word(w) in GREETING_WORDS))]
-    return " ".join(kept).strip(" ,.!?।-")
+    kept = [w for i, w in enumerate(words) if not (i < WAKE_WORD_POSITION and _is_wake(w))]
+    return " ".join(kept).strip(" ,.!?-")
 
+
+# ---------------------------------------------------------------- text to speech
 _SPEECH_MAP = str.maketrans({"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"',
                              "\u2014": ", ", "\u2013": ", ", "\u2011": "-", "\u2026": "...", "\u00a0": " "})
+
 
 def clean_for_speech(text):
     text = text.translate(_SPEECH_MAP)
     text = re.sub(r"https?://\S+|www\.\S+", "", text)      # never read links aloud
     text = re.sub(r"[*#`_]+", "", text)
-    text = "".join(c for c in text if c.isascii() or is_devanagari(c))
+    text = "".join(c for c in text if c.isascii())
     return " ".join(text.split())
 
+
 def split_sentences(text):
-    
-    parts = [p for p in re.split(r"(?<=[.!?।])\s+", text.strip()) if p]
+    """One chunk per sentence (very short ones are merged), so audio starts after the first sentence
+    and every online request is short enough not to time out."""
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p]
     chunks = []
     for p in parts:
         if chunks and len(chunks[-1]) < 40:
@@ -265,14 +233,15 @@ def split_sentences(text):
     return chunks
 
 
-def choose_voice(tts, language):
-    words = VOICE_KEYWORDS.get(language, ())
+def choose_voice(tts):
+    """Pick an English system voice that matches ASSISTANT_GENDER where possible."""
+    words = VOICE_KEYWORDS.get(LANG, ())
     gender_words = GENDER_VOICE_WORDS.get(ASSISTANT_GENDER, ())
     try:
         voices = list(tts.engine.getProperty("voices"))
     except Exception as error:
         print(f"[tts] could not list voices: {error}")
-        return language == "en"
+        return True
     best = None
     for i, voice in enumerate(voices):
         label = f"{voice.id} {voice.name}".lower()
@@ -284,9 +253,9 @@ def choose_voice(tts, language):
         best = best or (i, voice)
     if best:
         tts.set_voice(best[0])
-        print(f"[tts] system voice for {language}: {best[1].name}")
-        return True
-    return language == "en"
+        print(f"[tts] system voice: {best[1].name}")
+    return True
+
 
 def edge_available():
     try:
@@ -297,6 +266,7 @@ def edge_available():
         print(f"[tts] online voices are not installed ({error}). Run: pip install edge-tts miniaudio")
         return False
 
+
 async def _edge_audio(text, voice):
     import edge_tts
     data = bytearray()
@@ -305,20 +275,23 @@ async def _edge_audio(text, voice):
             data += chunk["data"]
     return bytes(data)
 
-def edge_fetch(text, language):
+
+def edge_fetch(text):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
     import miniaudio
     voices = EDGE_VOICES.get(ASSISTANT_GENDER) or EDGE_VOICES["male"]
-    mp3 = asyncio.run(asyncio.wait_for(_edge_audio(text, voices[language]), EDGE_TIMEOUT))
+    mp3 = asyncio.run(asyncio.wait_for(_edge_audio(text, voices[LANG]), EDGE_TIMEOUT))
     if not mp3:
         raise RuntimeError("no audio came back")
     rate = int(sd.query_devices(kind="output")["default_samplerate"])
     decoded = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
     return np.frombuffer(decoded.samples, dtype=np.int16), rate
 
+
 def _play(samples, rate):
     sd.play(samples, rate, latency="high")
     sd.wait()
+
 
 def _play_chunks(chunks, fetch, progress):
     """Play chunk i while chunk i+1 is already being made. progress[] records what was really spoken,
@@ -336,11 +309,11 @@ def _play_chunks(chunks, fetch, progress):
         pool.shutdown(wait=False)
 
 
-def speak_system(box, tts_cls, text, language):
+def speak_system(box, tts_cls, text):
     for attempt in (1, 2):
-        if box["language"] != language:
-            choose_voice(box["tts"], language)
-            box["language"] = language
+        if box["voice_ready"] is False:
+            choose_voice(box["tts"])
+            box["voice_ready"] = True
         started = time.time()
         box["tts"].speak(text)
         took = time.time() - started
@@ -353,7 +326,7 @@ def speak_system(box, tts_cls, text, language):
             box["tts"] = None
             gc.collect()
             box["tts"] = tts_cls()
-            box["language"] = None
+            box["voice_ready"] = False
     print("[tts] still silent after a restart. Check the output device and the volume.")
 
 
@@ -362,13 +335,12 @@ def say(box, tts_cls, text):
     text = clean_for_speech(text)
     if not text:
         return
-    language = script_language(text)
     chunks = split_sentences(text)
 
     if box.get("piper") and chunks:
         progress = []
         try:
-            _play_chunks(chunks, lambda c: piper_fetch(c, language), progress)
+            _play_chunks(chunks, piper_fetch, progress)
             return
         except Exception as error:
             print(f"[tts] piper failed ({type(error).__name__}: {error})")
@@ -377,7 +349,7 @@ def say(box, tts_cls, text):
     if box["edge"] and chunks and time.time() >= box.get("edge_off_until", 0):
         progress = []
         try:
-            _play_chunks(chunks, lambda c: edge_fetch(c, language), progress)
+            _play_chunks(chunks, edge_fetch, progress)
             box["edge_fails"] = 0
             return
         except Exception as error:
@@ -391,11 +363,7 @@ def say(box, tts_cls, text):
 
     if not chunks:
         return
-    text = " ".join(chunks)
-    if language == "hi" and not box["hindi_system"]:
-        print("[tts] cannot speak Hindi on this machine (no Hindi voice and no online voice).")
-        return
-    speak_system(box, tts_cls, text, language)
+    speak_system(box, tts_cls, " ".join(chunks))
 
 
 # ---------------------------------------------------------------- vision with retry
@@ -422,8 +390,6 @@ class Session:
         self.reply = ""
         self.reply_n = 0
         self.heard_n = 0
-        self.awake = False            # True only after the wake word, until she goes back to sleep
-
 
 def vision_intent(query):
     t = query.lower()
@@ -442,114 +408,31 @@ def vision_intent(query):
     return None
 
 
-# ---------------------------------------------------------------- notes (RAG) or general answer 
-OUTSIDE_NOTES_RULE = (
-    "The lab notes do not cover this question. If it is about operating, maintaining or staying "
-    "safe with specific lab equipment, say briefly that it is not in the lab notes and suggest "
-    "asking the lab staff. If it is another technology question, answer briefly from general "
-    "knowledge, starting with a short cue that this is not from the lab notes. Follow the scope "
-    "rules above for anything unrelated to technology."
-)
-
-
-
-def answer_query(llm, query, objects, history, language):
-    """Search the notes first. Found -> grounded answer. Not found -> general answer."""
-    rules = system_rules(language, ASSISTANT_GENDER)
-    hits = []
-    try:
-        search_q = query
-        if len(query.split()) < 4 and history:      # short follow-up like "yes": reuse the last question
-            last = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
-            search_q = f"{last} {query}"
-        hits = get_retriever().search(search_q, objects)
-    except Exception as error:                      # never let RAG break the voice loop
-        print(f"[rag ERROR] {type(error).__name__}: {error}")
-    if hits:
-        print(f"[rag] {len(hits)} chunks, best: {hits[0]['file']} (score {hits[0]['score']})")
-        return llm.generate_response(
-            user_message=build_message(query, objects),
-            system_prompt=RAG_SYSTEM_PROMPT + "\n\n" + rules,
-            conversation_history=history,
-            max_history_turns=HISTORY_MESSAGES,
-            retrieved_context=build_context(hits),
-        )
-    print("[rag] nothing relevant in the notes")
-    return llm.generate_response(
-        user_message=build_message(query, objects),
-        system_prompt=SYSTEM_PROMPT + "\n\n" + rules + "\n\n" + OUTSIDE_NOTES_RULE,
-        conversation_history=history,
-        max_history_turns=HISTORY_MESSAGES,
-    )
-
-
-def _warm_up_rag():
-    """Load the embedding model once, in the background, so the first question is not slow."""
-    try:
-        warm_up()
-    except Exception as error:
-        print(f"[rag] warm-up failed: {error}")
-
-
 # ---------------------------------------------------------------- main voice loop
 def voice_worker(s):
-    global LANGUAGE
     try:
         llm = find_class("llm", "LabAssistantLLM")()
         stt = find_class("audio", "SpeechToText")()
         tts_cls = find_class("audio", "TextToSpeech")
-        box = {"tts": tts_cls(), "language": None,
+        box = {"tts": tts_cls(), "voice_ready": False,
                "edge": TTS_ENGINE == "edge" and edge_available(),
                "piper": piper_available()}
-        box["hindi_system"] = hasattr(box["tts"], "engine") and choose_voice(box["tts"], "hi")
-        box["language"] = None
-        any_hindi = box["piper"] or box["edge"] or box["hindi_system"]
-        if LANGUAGE != "en" and not any_hindi:
-            LANGUAGE = "en"
-            print("[ARIA] No Hindi voice available, so Hindi is switched off and she will use English only.")
-        greet_language = LANGUAGE if LANGUAGE in ("en", "hi") else GREETING_LANGUAGE
-        if greet_language == "hi" and not any_hindi:
-            greet_language = "en"
         voice_kind = ("offline neural voices" if box["piper"]
                       else "online neural voices" if box["edge"] else "system voices")
-        print(f"[ARIA] language: {LANGUAGE} | voice: {ASSISTANT_GENDER}, {voice_kind} | wake word: "
-              + (f"required, say ARIA first (follow-up without it: {CONVO_WINDOW} s, "
-                 f"after a question: {FOLLOWUP_WINDOW} s)" if WAKE_REQUIRED else "off, answers everything"))
-        threading.Thread(target=_warm_up_rag, daemon=True).start()
+        print(f"[ARIA] language: English | voice: {ASSISTANT_GENDER}, {voice_kind} | wake word: "
+              + (f"say ARIA first, then talk freely ({CONVO_WINDOW} s after each reply, "
+                 f"{FOLLOWUP_WINDOW} s after a question)" if WAKE_WORD_REQUIRED else "off, answers everything"))
         history = []
         active_until = 0.0
         speech_started = [0.0]
-        last_spoke_end = [0.0]
-        reply_times = deque(maxlen=20)
+        last_reply = [0.0]
         spoken = deque(maxlen=3)
         with MicListener() as mic:
             s.mic = mic
 
-            def awake_now():
-                return (not WAKE_REQUIRED) or time.time() < active_until
-
-            def rest_status():
-                """Back to rest: awake (LISTENING) only while the wake-word window is open, otherwise IDLE."""
-                if awake_now():
-                    s.status = LISTENING
-                    s.awake = True
-                else:
-                    s.status = IDLE
-                    s.awake = False
-
-            def status_ticker():
-                """The window closes by itself: LISTENING -> IDLE when time runs out."""
-                while not s.quit.is_set():
-                    if s.status == LISTENING and not awake_now():
-                        s.status = IDLE
-                        s.awake = False
-                    time.sleep(0.2)
-
-            threading.Thread(target=status_ticker, daemon=True).start()
-
             def on_speech_start():
                 speech_started[0] = time.time()
-                s.status = HEARING                 # reacts when the user speaks; goes back to IDLE if no wake word
+                s.status = HEARING
 
             def speak(text):
                 nonlocal active_until
@@ -566,72 +449,55 @@ def voice_worker(s):
                     if s.detector is not None:
                         s.detector.paused = False
                 print(f"[time] tts {time.time() - t:.2f}s")
-                time.sleep(max(ECHO_TAIL, ECHO_GUARD))     # let the room and the speaker go quiet
+                time.sleep(ECHO_TAIL)
                 mic.drain()
-                last_spoke_end[0] = time.time()
-                # a reply that ends with a question may keep a short follow-up window open (0 = strict)
+                # a reply that ends with a question keeps the conversation open longer
                 asks = "?" in text[-120:]
                 active_until = time.time() + (FOLLOWUP_WINDOW if asks else CONVO_WINDOW)
-                rest_status()
+                last_reply[0] = time.time()
+                s.status = LISTENING
 
+            speak(greeting(LANG, ASSISTANT_GENDER))
             s.status = CALIBRATING
-            mic.calibrate()          # measure the room BEFORE she speaks, so her greeting can not leak into it
-            speak(greeting(greet_language, ASSISTANT_GENDER))
+            mic.calibrate()
+            s.status = LISTENING
             while not s.quit.is_set():
                 path = mic.listen(s.quit, on_speech_start=on_speech_start)
                 if not path:
-                    rest_status()
+                    s.status = LISTENING
                     continue
-                if awake_now():
-                    s.status = "transcribing..."
-                heard, language = transcribe_speech(stt, path)
-                if not heard or len(heard.strip(" .!?।")) < 2:
+                s.status = "transcribing..."
+                heard, _ = transcribe_speech(stt, path)
+                if not heard or len(heard.strip(" .!?")) < 2:
                     s.heard = "(could not make out any words)"
                     mic.drain()
-                    rest_status()
+                    s.status = LISTENING
                     continue
-                since = max(0.0, (speech_started[0] or time.time()) - last_spoke_end[0])
-                if looks_like_echo(heard, spoken, since):
+                if looks_like_echo(heard, spoken):
                     print(f"[echo] ignored (that was ARIA's own voice): {heard!r}")
                     s.heard = "(ignored: her own echo)"
                     mic.drain()
-                    rest_status()
+                    s.status = LISTENING
                     continue
-                query = apply_wake_word(heard, speech_started[0] or time.time(), active_until)
+                started = speech_started[0] or time.time()
+                query = apply_wake_word(heard, started, active_until, last_reply[0])
                 if query is None:
-                    print(f"[wake] ignored (not addressed to ARIA): {heard!r}")
+                    gap = started - active_until
+                    print(f"[wake] ignored (window closed {gap:.0f}s before you spoke; "
+                          f"{started - last_reply[0]:.0f}s after ARIA's last reply): {heard!r}")
                     s.heard = f"(ignored, no ARIA) {heard}"
-                    rest_status()
+                    s.status = LISTENING
                     continue
-                s.awake = True                                   # the wake word was said
                 if query == "":
-                    speak(WAKE_REPLIES[language])
-                    active_until = time.time() + ARMED_SECONDS    # now she is listening for the question
-                    rest_status()
+                    speak(WAKE_REPLIES[LANG])
                     continue
                 s.heard = query
                 s.heard_n += 1
-                print(f"\nYou ({language}): {query}")
-                if query.lower().strip(" .!?।") in EXIT_WORDS:
-                    speak("Goodbye." if language == "en" else "अलविदा!")
+                print(f"\nYou: {query}")
+                if query.lower().strip(" .!?") in EXIT_WORDS:
+                    speak("Goodbye.")
                     s.quit.set()
                     break
-
-                # runaway guard: she should never answer many times a minute on her own
-                now = time.time()
-                while reply_times and now - reply_times[0] > 60:
-                    reply_times.popleft()
-                if len(reply_times) >= MAX_REPLIES_PER_MINUTE:
-                    print("[guard] too many replies in one minute - pausing 15 s. "
-                          "Is ARIA hearing herself? Check speaker/mic placement and volume.")
-                    mic.drain()
-                    time.sleep(15)
-                    mic.drain()
-                    reply_times.clear()
-                    rest_status()
-                    continue
-                reply_times.append(now)
-
                 objects = s.detector.stable_labels()
                 mode = vision_intent(query)
                 print(f"[intent] {mode}")
@@ -649,7 +515,12 @@ def voice_worker(s):
                     continue
                 print(f"[camera sees: {', '.join(objects) or 'nothing recognizable'}]")
                 s.status = "thinking..."
-                reply = answer_query(llm, query, objects, history, language)
+                reply = llm.generate_response(
+                    user_message=build_message(query, objects),
+                    system_prompt=SYSTEM_PROMPT + "\n\n" + system_rules(LANG, ASSISTANT_GENDER),
+                    conversation_history=history,
+                    max_history_turns=HISTORY_MESSAGES,
+                )
                 history += [{"role": "user", "content": query},
                             {"role": "assistant", "content": reply}]
                 print(f"ARIA: {reply}")
