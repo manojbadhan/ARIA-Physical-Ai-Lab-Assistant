@@ -15,6 +15,7 @@ NOT_IN_NOTES = "This is not in the notes."
 CANDIDATES = 20          # how many chunks each search method proposes before fusing
 RRF_K = 60               # standard reciprocal-rank-fusion constant
 MIN_BM25 = 3.0           # BM25 score that counts as a real keyword match
+MIN_COSINE_WITH_KEYWORD = 0.10   # a keyword hit also needs at least this much meaning-match
 
 STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "it", "its", "this", "that",
@@ -68,7 +69,7 @@ class Retriever:
         for i in best:
             s = sims[self.chunks[i]["id"]]
             # keep a chunk if EITHER method is confident about it
-            if s >= SIMILARITY_THRESHOLD or kw[i] >= MIN_BM25:
+            if s >= SIMILARITY_THRESHOLD or (kw[i] >= MIN_BM25 and s >= MIN_COSINE_WITH_KEYWORD):
                 results.append({**self.chunks[i], "score": round(float(s), 3),
                                 "keyword": round(float(kw[i]), 2)})
         return results

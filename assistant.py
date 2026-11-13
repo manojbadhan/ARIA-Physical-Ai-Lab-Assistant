@@ -24,7 +24,8 @@ from config import (
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
     WAKE_WORD_REQUIRED, WAKE_WORDS
 )
-from llm.prompts import SYSTEM_PROMPT
+from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from rag.retrieve import get_retriever, build_context, warm_up
 
 LANG = "en"        # ARIA is English only
 
@@ -407,6 +408,38 @@ def vision_intent(query):
         return "ask"                  # free question about what the camera sees
     return None
 
+# ---------------------------------------------------------------- lab notes (RAG)
+def answer_query(llm, query, objects, history):
+    """Search the lab notes first. If something relevant is found, give it to the LLM as help."""
+    search_q = query
+    if len(query.split()) < 4 and history:          # short follow-up such as "yes" or "tell me more"
+        last = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+        search_q = f"{last} {query}"
+    # camera labels help only for "how do I use this?"; otherwise a stray label like "pen" adds noise
+    look_at = objects if re.search(r"\b(this|that|these|those|it)\b", query.lower()) else None
+    hits = []
+    try:
+        hits = get_retriever().search(search_q, look_at)
+    except Exception as error:                      # never let a search problem stop the voice loop
+        print(f"[rag ERROR] {type(error).__name__}: {error}")
+    rules = system_rules(LANG, ASSISTANT_GENDER)
+    if hits:
+        print(f"[rag] {len(hits)} chunks, best: {hits[0]['file']} (score {hits[0]['score']})")
+        return llm.generate_response(
+            user_message=build_message(query, objects),
+            system_prompt=RAG_SYSTEM_PROMPT + "\n\n" + rules,
+            conversation_history=history,
+            max_history_turns=HISTORY_MESSAGES,
+            retrieved_context=build_context(hits),
+        )
+    print("[rag] nothing relevant in the notes")
+    return llm.generate_response(
+        user_message=build_message(query, objects),
+        system_prompt=SYSTEM_PROMPT + "\n\n" + rules,
+        conversation_history=history,
+        max_history_turns=HISTORY_MESSAGES,
+    )
+
 
 # ---------------------------------------------------------------- main voice loop
 def voice_worker(s):
@@ -515,16 +548,12 @@ def voice_worker(s):
                     continue
                 print(f"[camera sees: {', '.join(objects) or 'nothing recognizable'}]")
                 s.status = "thinking..."
-                reply = llm.generate_response(
-                    user_message=build_message(query, objects),
-                    system_prompt=SYSTEM_PROMPT + "\n\n" + system_rules(LANG, ASSISTANT_GENDER),
-                    conversation_history=history,
-                    max_history_turns=HISTORY_MESSAGES,
-                )
+                reply = answer_query(llm, query, objects, history)
                 history += [{"role": "user", "content": query},
                             {"role": "assistant", "content": reply}]
                 print(f"ARIA: {reply}")
                 speak(reply)
+                threading.Thread(target=warm_up, daemon=True).start()   # build/load the notes in the background
     except Exception:
         traceback.print_exc()
         s.status = "VOICE ERROR - see terminal"
