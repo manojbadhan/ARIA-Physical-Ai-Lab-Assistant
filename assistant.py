@@ -1,4 +1,3 @@
-import asyncio
 import difflib
 import gc
 import importlib
@@ -18,12 +17,13 @@ from audio.listener import MicListener
 from vision.gemini_vision import analyze
 from chat.prompts2 import WAKE_REPLIES, build_message, greeting, system_rules
 from config import (
-    ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL, EDGE_RATE, EDGE_TIMEOUT, EDGE_VOICES, EDGE_VOLUME,
+    ACTIVE_WINDOW, ASSISTANT_GENDER, ECHO_OVERLAP, ECHO_TAIL,
     EXIT_WORDS, FASTEST_SPEECH_CPS, GENDER_VOICE_WORDS, HISTORY_MESSAGES,
     MAX_COMPRESSION_RATIO, MAX_FOREIGN_RATIO, MAX_NO_SPEECH_PROB, MIN_AVG_LOGPROB, PAUSE_VISION_WHILE_SPEAKING,
     STT_MODELS, STT_PROMPTS, TTS_ENGINE, VOICE_KEYWORDS, WAKE_FUZZY_RATIO, WAKE_WORD_POSITION,
     WAKE_WORD_REQUIRED, WAKE_WORDS
 )
+import config as _cfg
 from llm.prompts import SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
 from rag.retrieve import get_retriever, build_context, warm_up
 
@@ -46,34 +46,75 @@ FOLLOWUP_STARTS = ("tell me more", "tell me in detail", "in detail", "explain", 
                    "what about", "and what", "how come", "why")
 
 # ---------------------------------------------------------------- Piper (offline neural voice)
+# Piper is the offline backup voice. The Gemini voice (online) is tried first.
 _PIPER = {}
-PIPER_MODEL = "~/ARIA/voices/en_US-ryan-medium.onnx"
+PIPER_MODEL_NAME = "en_US-ryan-medium.onnx"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+PIPER_MODEL_CANDIDATES = (
+    os.path.join(_HERE, "voices", PIPER_MODEL_NAME),                      # <project>/voices (works from any cwd)
+    os.path.expanduser(os.path.join("~", "ARIA", "voices", PIPER_MODEL_NAME)),
+)
+
+
+def _piper_model_path():
+    for path in PIPER_MODEL_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def piper_available():
-    """Piper is usable if the package is installed and the English model exists."""
+    """Piper is usable if the package imports and the English model (+ its .json) exists."""
     try:
         import piper  # noqa: F401
     except ImportError:
         print("[tts] piper not installed. Run: pip install piper-tts")
         return False
-    if not os.path.exists(os.path.expanduser(PIPER_MODEL)):
-        print(f"[tts] piper English model not found at {PIPER_MODEL}")
+    except Exception as error:                      # e.g. onnxruntime failing to load on this CPU/Python
+        print(f"[tts] piper could not be imported ({type(error).__name__}: {error})")
+        return False
+    model = _piper_model_path()
+    if model is None:
+        print("[tts] piper English model not found. Looked in:\n      " + "\n      ".join(PIPER_MODEL_CANDIDATES))
+        return False
+    if not os.path.exists(model + ".json"):
+        print(f"[tts] piper needs {model}.json next to the .onnx file, but it is missing")
         return False
     return True
 
 
+def _piper_voice():
+    """Load the Piper voice once and reuse it."""
+    if "en" not in _PIPER:
+        from piper import PiperVoice
+        _PIPER["en"] = PiperVoice.load(_piper_model_path())
+    return _PIPER["en"]
+
+
+def _resample(audio, rate, out_rate):
+    """Convert int16 audio to the speaker's sample rate (USB speakers often reject 22050 Hz)."""
+    if rate == out_rate:
+        return audio
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(rate, out_rate)
+        out = resample_poly(audio.astype(np.float32), out_rate // g, rate // g)
+        return np.clip(out, -32768, 32767).astype(np.int16)
+    except ImportError:                             # no scipy: plain linear interpolation (slightly harsher)
+        n = int(len(audio) * out_rate / rate)
+        return np.interp(np.linspace(0, len(audio), n, endpoint=False),
+                         np.arange(len(audio)), audio).astype(np.int16)
+
+
 def piper_fetch(text):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
-    from piper import PiperVoice
-    if "en" not in _PIPER:                          # load once, reuse
-        _PIPER["en"] = PiperVoice.load(os.path.expanduser(PIPER_MODEL))
-    voice = _PIPER["en"]
+    voice = _piper_voice()
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
-        try:
+        if hasattr(voice, "synthesize_wav"):
             voice.synthesize_wav(text, wf)          # piper-tts >= 1.3
-        except AttributeError:
+        else:
             voice.synthesize(text, wf)              # older piper-tts
     buf.seek(0)
     with wave.open(buf, "rb") as wf:
@@ -82,11 +123,7 @@ def piper_fetch(text):
     if audio.size == 0:
         raise RuntimeError("piper produced no audio")
     out_rate = int(sd.query_devices(kind="output")["default_samplerate"])
-    if out_rate != rate:                            # USB speakers often reject 22050 Hz
-        n = int(len(audio) * out_rate / rate)
-        audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
-                          np.arange(len(audio)), audio).astype(np.int16)
-    return audio, out_rate
+    return _resample(audio, rate, out_rate), out_rate
 
 
 # ---------------------------------------------------------------- helpers
@@ -258,35 +295,62 @@ def choose_voice(tts):
     return True
 
 
-def edge_available():
+# ---------------------------------------------------------------- Gemini TTS (online voice)
+GEMINI_TTS_MODEL = "gemini-3.8-flash-lite-tts"     # fast, made for voice assistants. More acting: "gemini-3.8-flash-tts"
+GEMINI_TTS_VOICES = {"male": "Achird", "female": "Sulafat"}   # Achird = friendly, Sulafat = warm. Try Charon, Kore, Puck...
+GEMINI_TTS_TIMEOUT = 6      # seconds per sentence before giving up and using Piper
+GEMINI_COOLDOWN = 120       # after a failure, skip Gemini for this long so offline replies are not delayed
+_GEMINI = {}
+
+
+def _gemini_key():
+    return (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            or getattr(_cfg, "GEMINI_API_KEY", None))
+
+
+def gemini_available():
     try:
-        import edge_tts  # noqa: F401
-        import miniaudio  # noqa: F401
-        return True
-    except ImportError as error:
-        print(f"[tts] online voices are not installed ({error}). Run: pip install edge-tts miniaudio")
+        from google import genai  # noqa: F401
+    except ImportError:
+        print("[tts] gemini voice not installed. Run: pip install -U google-genai")
         return False
+    if not _gemini_key():
+        print("[tts] gemini voice: no API key found (set GEMINI_API_KEY)")
+        return False
+    return True
 
 
-async def _edge_audio(text, voice):
-    import edge_tts
-    data = bytearray()
-    async for chunk in edge_tts.Communicate(text, voice, rate=EDGE_RATE, volume=EDGE_VOLUME).stream():
-        if chunk["type"] == "audio":
-            data += chunk["data"]
-    return bytes(data)
+def _gemini_client():
+    if "client" not in _GEMINI:
+        from google import genai
+        from google.genai import types
+        _GEMINI["client"] = genai.Client(
+            api_key=_gemini_key(),
+            http_options=types.HttpOptions(timeout=int(GEMINI_TTS_TIMEOUT * 1000)))   # milliseconds
+    return _GEMINI["client"]
 
 
-def edge_fetch(text):
+def gemini_fetch(text):
     """Make the audio for one chunk of text. Returns (int16 samples, sample rate)."""
-    import miniaudio
-    voices = EDGE_VOICES.get(ASSISTANT_GENDER) or EDGE_VOICES["male"]
-    mp3 = asyncio.run(asyncio.wait_for(_edge_audio(text, voices[LANG]), EDGE_TIMEOUT))
-    if not mp3:
+    voice = GEMINI_TTS_VOICES.get(ASSISTANT_GENDER) or GEMINI_TTS_VOICES["male"]
+    response = _gemini_client().models.generate_content(
+        model=GEMINI_TTS_MODEL,
+        contents=[{"role": "user", "parts": [{"text": text}]}],
+        config={"response_modalities": ["AUDIO"],
+                "speech_config": {"voice_config": {"voice": voice}}},
+    )
+    data = response.candidates[0].content.parts[0].inline_data.data
+    if not data:
         raise RuntimeError("no audio came back")
-    rate = int(sd.query_devices(kind="output")["default_samplerate"])
-    decoded = miniaudio.decode(mp3, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
-    return np.frombuffer(decoded.samples, dtype=np.int16), rate
+    rate = 24000
+    if data[:4] == b"RIFF":                          # 3.8 models return a full WAV file
+        with wave.open(io.BytesIO(data), "rb") as wf:
+            rate = wf.getframerate()
+            audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+    else:                                           # raw 16-bit PCM, 24 kHz mono
+        audio = np.frombuffer(data, dtype=np.int16)
+    out_rate = int(sd.query_devices(kind="output")["default_samplerate"])
+    return _resample(audio, rate, out_rate), out_rate
 
 
 def _play(samples, rate):
@@ -332,11 +396,21 @@ def speak_system(box, tts_cls, text):
 
 
 def say(box, tts_cls, text):
-    """Order: Piper (offline) -> Edge (online) -> system voice. Sentence by sentence."""
+    """Order: Gemini voice (online, most human) -> Piper (offline) -> system voice. Sentence by sentence."""
     text = clean_for_speech(text)
     if not text:
         return
     chunks = split_sentences(text)
+
+    if box.get("gemini") and chunks and time.time() >= box.get("gemini_off_until", 0):
+        progress = []
+        try:
+            _play_chunks(chunks, gemini_fetch, progress)
+            return
+        except Exception as error:
+            print(f"[tts] gemini voice failed ({type(error).__name__}: {error}); using piper")
+            chunks = chunks[len(progress):]
+            box["gemini_off_until"] = time.time() + GEMINI_COOLDOWN   # no waiting for a timeout on every reply
 
     if box.get("piper") and chunks:
         progress = []
@@ -345,22 +419,8 @@ def say(box, tts_cls, text):
             return
         except Exception as error:
             print(f"[tts] piper failed ({type(error).__name__}: {error})")
+            traceback.print_exc()
             chunks = chunks[len(progress):]
-
-    if box["edge"] and chunks and time.time() >= box.get("edge_off_until", 0):
-        progress = []
-        try:
-            _play_chunks(chunks, edge_fetch, progress)
-            box["edge_fails"] = 0
-            return
-        except Exception as error:
-            print(f"[tts] online voice failed ({type(error).__name__}: {error}); using the system voice")
-            chunks = chunks[len(progress):]
-            box["edge_fails"] = box.get("edge_fails", 0) + 1
-            if box["edge_fails"] >= 2:      # do not wait for a timeout on every single reply
-                box["edge_off_until"] = time.time() + 300
-                box["edge_fails"] = 0
-                print("[tts] online voice keeps failing, skipping it for 5 minutes")
 
     if not chunks:
         return
@@ -448,10 +508,19 @@ def voice_worker(s):
         stt = find_class("audio", "SpeechToText")()
         tts_cls = find_class("audio", "TextToSpeech")
         box = {"tts": tts_cls(), "voice_ready": False,
-               "edge": TTS_ENGINE == "edge" and edge_available(),
+               "gemini": TTS_ENGINE != "piper" and gemini_available(),
                "piper": piper_available()}
-        voice_kind = ("offline neural voices" if box["piper"]
-                      else "online neural voices" if box["edge"] else "system voices")
+        if box["piper"]:
+            # load the Piper model now, so the first reply is not slow and a broken install shows up at startup
+            try:
+                _piper_voice()
+            except Exception:
+                print("[tts] piper could not load its model, falling back to the other voices:")
+                traceback.print_exc()
+                box["piper"] = False
+        voice_kind = ("gemini online voice + piper offline" if box["gemini"] and box["piper"]
+                      else "gemini online voice" if box["gemini"]
+                      else "piper offline voice" if box["piper"] else "system voices")
         print(f"[ARIA] language: English | voice: {ASSISTANT_GENDER}, {voice_kind} | wake word: "
               + (f"say ARIA first, then talk freely ({CONVO_WINDOW} s after each reply, "
                  f"{FOLLOWUP_WINDOW} s after a question)" if WAKE_WORD_REQUIRED else "off, answers everything"))
